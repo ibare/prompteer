@@ -8,13 +8,12 @@ version = "0.1.0"
 description = "A lightweight file-based prompt manager for LLM workflows. Simple, scalable, and version-control friendly."
 readme = "README.md"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Mintae Kim", email = "ibare77@gmail.com"}
 ]
-license = {text = "MIT"}
+license = "MIT"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
@@ -48,10 +47,10 @@ watch = [
 prompteer = "prompteer.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/prompteer"
-Documentation = "https://github.com/yourusername/prompteer#readme"
-Repository = "https://github.com/yourusername/prompteer"
-"Bug Tracker" = "https://github.com/yourusername/prompteer/issues"
+Homepage = "https://github.com/ibare/prompteer"
+Documentation = "https://github.com/ibare/prompteer#readme"
+Repository = "https://github.com/ibare/prompteer"
+"Bug Tracker" = "https://github.com/ibare/prompteer/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
