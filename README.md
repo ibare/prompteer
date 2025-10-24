@@ -284,6 +284,125 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
+---
+
+## For AI Agents & LLM Tools
+
+### Quick Integration Guide
+
+**Installation from GitHub (before PyPI release):**
+```bash
+pip install git+https://github.com/ibare/prompteer.git
+```
+
+**Installation from PyPI (when available):**
+```bash
+pip install prompteer
+```
+
+### Essential Usage Pattern
+
+```python
+from prompteer import create_prompts
+
+# 1. Load prompts from directory
+prompts = create_prompts("./prompts")
+
+# 2. Access prompts with dot notation
+result = prompts.chat.system(
+    role="helpful assistant",
+    personality="friendly and patient"
+)
+
+# 3. Use the rendered prompt
+print(result)
+```
+
+### Prompt File Format
+
+Create markdown files with YAML frontmatter:
+
+```markdown
+---
+description: System message prompt
+role: AI role description
+personality: AI personality traits
+---
+You are a {role}.
+Your personality is {personality}.
+```
+
+### File Structure Convention
+
+```
+prompts/
+├── chat/
+│   ├── system.md       → prompts.chat.system()
+│   └── user-query.md   → prompts.chat.userQuery()
+└── code-review/
+    └── review.md       → prompts.codeReview.review()
+```
+
+**Key Convention**: `kebab-case` files/directories → `camelCase` Python methods
+
+### Type Hints (Optional)
+
+```bash
+# Generate type stubs for IDE autocomplete
+prompteer generate-types ./prompts -o prompts.pyi
+```
+
+### Key Implementation Files
+
+- `src/prompteer/core.py` - Main `Prompteer` class and `create_prompts()` function
+- `src/prompteer/proxy.py` - Dynamic attribute access via `__getattr__`
+- `src/prompteer/template.py` - Variable substitution engine
+- `src/prompteer/metadata.py` - YAML frontmatter parsing
+- `src/prompteer/type_generator.py` - Type stub generation
+
+### Common Patterns
+
+**Dynamic prompt selection:**
+```python
+prompts = create_prompts("./prompts")
+
+# Select prompt based on runtime condition
+if task_type == "code_review":
+    prompt = prompts.codeReview.reviewRequest(language="Python", code=code)
+elif task_type == "translation":
+    prompt = prompts.translation.translate(source="EN", target="KO", text=text)
+```
+
+**Error handling:**
+```python
+from prompteer import create_prompts, PromptNotFoundError
+
+try:
+    prompts = create_prompts("./prompts")
+    result = prompts.some.prompt()
+except PromptNotFoundError as e:
+    print(f"Prompt not found: {e}")
+```
+
+### Supported Variable Types
+
+In YAML frontmatter:
+- `name: description` - defaults to `str`
+- `age(int): description` - integer
+- `score(float): description` - float
+- `active(bool): description` - boolean
+- `count(number): description` - int or float
+- `data(any): description` - any type
+
+### Testing
+
+Examples available in `examples/` directory:
+- `examples/basic_usage.py` - Basic features
+- `examples/llm_integration.py` - LLM API integration
+- `examples/advanced_usage.py` - Advanced patterns
+
+---
+
 ## Links
 
 - **GitHub**: https://github.com/ibare/prompteer
