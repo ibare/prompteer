@@ -5,7 +5,12 @@ This example demonstrates how to use prompteer with popular LLM APIs.
 Note: This is a mock example. To run with real APIs, you need API keys.
 """
 
+from pathlib import Path
+
 from prompteer import create_prompts
+
+# Get prompts directory relative to this file (not CWD)
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
 def example_with_openai() -> None:
@@ -14,7 +19,7 @@ def example_with_openai() -> None:
     print("OpenAI Integration Example")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Prepare messages for ChatGPT
     messages = [
@@ -55,7 +60,7 @@ def example_with_anthropic() -> None:
     print("Anthropic Claude Integration Example")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Prepare prompt for Claude
     system_prompt = prompts.chat.system(
@@ -99,7 +104,7 @@ def example_batch_processing() -> None:
     print("Batch Processing Example")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Prepare multiple translation requests
     texts_to_translate = [
@@ -132,7 +137,7 @@ def example_multi_step_workflow() -> None:
     print("Multi-Step Workflow Example")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Step 1: Generate code
     print("\nStep 1: Request code generation")

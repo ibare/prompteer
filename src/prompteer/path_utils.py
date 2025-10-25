@@ -133,3 +133,60 @@ def is_valid_attribute_name(name: str) -> bool:
     """
     # Must start with letter or underscore, followed by letters, digits, or underscores
     return bool(re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name))
+
+
+def is_dynamic_dir(name: str) -> bool:
+    """Check if a directory name represents a dynamic parameter.
+
+    Dynamic directories are enclosed in square brackets, e.g., [type], [category].
+
+    Args:
+        name: Directory name to check
+
+    Returns:
+        True if name matches [param] pattern, False otherwise
+
+    Examples:
+        >>> is_dynamic_dir("[type]")
+        True
+        >>> is_dynamic_dir("[category]")
+        True
+        >>> is_dynamic_dir("normal")
+        False
+        >>> is_dynamic_dir("[invalid name]")
+        False
+        >>> is_dynamic_dir("[]")
+        False
+    """
+    # Pattern: [valid_identifier]
+    pattern = r"^\[([a-zA-Z_][a-zA-Z0-9_]*)\]$"
+    return bool(re.match(pattern, name))
+
+
+def extract_param_name(name: str) -> str:
+    """Extract parameter name from dynamic directory name.
+
+    Args:
+        name: Dynamic directory name (e.g., "[type]")
+
+    Returns:
+        Parameter name without brackets (e.g., "type")
+
+    Raises:
+        ValueError: If name is not a valid dynamic directory
+
+    Examples:
+        >>> extract_param_name("[type]")
+        'type'
+        >>> extract_param_name("[category]")
+        'category'
+        >>> extract_param_name("normal")
+        Traceback (most recent call last):
+            ...
+        ValueError: Not a dynamic directory: normal
+    """
+    pattern = r"^\[([a-zA-Z_][a-zA-Z0-9_]*)\]$"
+    match = re.match(pattern, name)
+    if not match:
+        raise ValueError(f"Not a dynamic directory: {name}")
+    return match.group(1)

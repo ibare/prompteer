@@ -21,7 +21,12 @@ class Prompteer:
     in a directory structure.
 
     Example:
+        >>> from pathlib import Path
+        >>> # Relative to CWD
         >>> prompts = Prompteer("./prompts")
+        >>> # Relative to current file (recommended for packages)
+        >>> prompts = Prompteer(Path(__file__).parent / "prompts")
+        >>> # Usage
         >>> text = prompts.greeting.casual()
         >>> text = prompts.myPrompt.question.user(name="Alice", age=30)
     """
@@ -30,7 +35,9 @@ class Prompteer:
         """Initialize Prompteer with a base directory.
 
         Args:
-            base_path: Root directory containing prompt files
+            base_path: Root directory containing prompt files.
+                       Relative paths are resolved from current working directory.
+                       For packages, use: Path(__file__).parent / "prompts"
             encoding: File encoding for reading prompts (default: utf-8)
 
         Raises:
@@ -123,6 +130,23 @@ def create_prompts(base_path: str | Path, encoding: str = "utf-8") -> Any:
     This is a convenience factory function that creates a Prompteer instance
     and returns it with proper type hints when used with generated type stubs.
 
+    Path Resolution:
+        Relative paths are resolved relative to the current working directory (CWD).
+        For library usage, use absolute paths or resolve relative to your file:
+
+        >>> from pathlib import Path
+        >>> from prompteer import create_prompts
+        >>>
+        >>> # Relative to CWD (works if you run from project root)
+        >>> prompts = create_prompts("./prompts")
+        >>>
+        >>> # Absolute path (always works)
+        >>> prompts = create_prompts("/absolute/path/to/prompts")
+        >>>
+        >>> # Relative to this file's location (recommended for libraries)
+        >>> PROMPTS_DIR = Path(__file__).parent / "prompts"
+        >>> prompts = create_prompts(PROMPTS_DIR)
+
     Usage with type stubs:
         >>> # After running: prompteer generate-types ./prompts -o prompts.pyi
         >>> from prompts import create_prompts
@@ -135,7 +159,8 @@ def create_prompts(base_path: str | Path, encoding: str = "utf-8") -> Any:
         >>> # Works the same, just without IDE autocomplete
 
     Args:
-        base_path: Root directory containing prompt files
+        base_path: Root directory containing prompt files.
+                   Can be absolute or relative (resolved from CWD).
         encoding: File encoding for reading prompts (default: utf-8)
 
     Returns:

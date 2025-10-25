@@ -8,7 +8,12 @@ This example demonstrates:
 4. Working with metadata and defaults
 """
 
+from pathlib import Path
+
 from prompteer import create_prompts
+
+# Get prompts directory relative to this file (not CWD)
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
 def main() -> None:
@@ -19,7 +24,8 @@ def main() -> None:
     print("=" * 60)
 
     # Create prompts with full type hints
-    prompts = create_prompts("examples/prompts")
+    # Using Path(__file__).parent ensures it works regardless of CWD
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Example 1: Simple prompt access
     print("\n1. Accessing chat system prompt:")

@@ -8,7 +8,12 @@ This example demonstrates:
 4. Custom prompt workflows
 """
 
+from pathlib import Path
+
 from prompteer import PromptNotFoundError, create_prompts
+
+# Get prompts directory relative to this file (not CWD)
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
 def example_dynamic_prompt_selection() -> None:
@@ -17,7 +22,7 @@ def example_dynamic_prompt_selection() -> None:
     print("Dynamic Prompt Selection")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Simulate different user scenarios
     scenarios = [
@@ -59,7 +64,7 @@ def example_prompt_composition() -> None:
     print("Prompt Composition")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Build a complex prompt by combining multiple prompts
     system_context = prompts.chat.system(
@@ -93,7 +98,7 @@ def example_error_handling() -> None:
     print("Error Handling")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     # Example 1: Handling non-existent prompts
     print("\n1. Handling non-existent prompts:")
@@ -124,7 +129,7 @@ def example_custom_workflow() -> None:
     print("Custom Workflow: Code Generation & Review Cycle")
     print("=" * 60)
 
-    prompts = create_prompts("examples/prompts")
+    prompts = create_prompts(PROMPTS_DIR)
 
     class CodeGenerationWorkflow:
         """A workflow for generating and reviewing code."""

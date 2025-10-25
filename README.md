@@ -6,6 +6,7 @@ A lightweight file-based prompt manager for LLM workflows. Simple, scalable, and
 
 - **File-based prompt management** - Store prompts as markdown files
 - **Intuitive dot notation API** - Access prompts naturally: `prompts.chat.system()`
+- **Dynamic routing** - Next.js-style `[param]` directories for flexible prompt selection
 - **Version control friendly** - Track prompt changes with Git
 - **Zero configuration** - Start using immediately
 - **IDE autocomplete support** - Full type hints with generated stubs
@@ -20,7 +21,26 @@ pip install prompteer
 
 ## Quick Start
 
-### 1. Create Your Prompt Directory
+### 1. Initialize Your Prompt Directory
+
+Use the `init` command to create a prompt directory with example prompts:
+
+```bash
+prompteer init
+```
+
+This creates a `prompts/` directory with:
+- Basic chat prompts
+- Dynamic routing examples
+- Variable types demonstrations
+
+Or initialize in a custom directory:
+
+```bash
+prompteer init my-prompts
+```
+
+### 2. Or Create Your Own Structure
 
 ```
 my-project/
@@ -32,7 +52,7 @@ my-project/
 └── main.py
 ```
 
-### 2. Write Prompts with Variables
+### 3. Write Prompts with Variables
 
 **`prompts/chat/system.md`:**
 ```markdown
@@ -48,13 +68,18 @@ Your personality is {personality}.
 Please be helpful, accurate, and respectful in all interactions.
 ```
 
-### 3. Use in Your Code
+### 4. Use in Your Code
 
 ```python
+from pathlib import Path
 from prompteer import create_prompts
 
-# Load prompts
+# Option 1: Relative to current working directory
 prompts = create_prompts("./prompts")
+
+# Option 2: Relative to your script file (recommended for packages/libraries)
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+prompts = create_prompts(PROMPTS_DIR)
 
 # Use with variables
 system_message = prompts.chat.system(
@@ -68,6 +93,11 @@ print(system_message)
 # Your personality is friendly and patient.
 # Please be helpful, accurate, and respectful in all interactions.
 ```
+
+**Path Resolution:**
+- Relative paths (e.g., `"./prompts"`) are resolved from the current working directory
+- For packages/libraries, use `Path(__file__).parent / "prompts"` to ensure it works regardless of where the code is run from
+- Absolute paths always work but are less portable
 
 ## Type Hints & IDE Autocomplete
 
@@ -125,6 +155,63 @@ Supported types:
 - `number` (int or float)
 - `any`
 
+## Dynamic Routing
+
+Create flexible prompts that adapt based on runtime parameters, similar to Next.js dynamic routes.
+
+### Basic Example
+
+**File Structure:**
+```
+prompts/
+└── question/
+    └── [type]/              # Dynamic parameter: type
+        ├── basic/           # type="basic"
+        │   └── user.md
+        ├── advanced/        # type="advanced"
+        │   └── user.md
+        └── default.md       # Fallback when no match
+```
+
+**Usage:**
+```python
+from prompteer import create_prompts
+
+prompts = create_prompts("./prompts")
+
+# Select different prompt versions
+basic = prompts.question.user(type="basic", name="Alice")
+advanced = prompts.question.user(type="advanced", name="Bob", context="Python expert")
+
+# Fallback to default.md if type not found
+fallback = prompts.question.user(type="expert")  # Uses default.md
+```
+
+### How It Works
+
+1. `[type]` directory = dynamic parameter
+2. `basic/`, `advanced/` = possible values for the parameter
+3. `default.md` = fallback when value doesn't match any directory
+4. If no default.md exists, raises `PromptNotFoundError`
+
+### Type Hints with Dynamic Routing
+
+Generate type stubs to get IDE autocomplete for available values:
+
+```bash
+prompteer generate-types ./prompts -o prompts.pyi
+```
+
+Your generated type stub will include `Literal` types:
+```python
+def user(
+    self,
+    type: Literal["basic", "advanced"],  # Autocomplete with available values!
+    name: str = "",
+    **kwargs: Any
+) -> str: ...
+```
+
 ## Real-World Example
 
 ### Prompt File Structure
@@ -172,17 +259,40 @@ response = openai.ChatCompletion.create(
 
 ## CLI Commands
 
+### Initialize Project
+
+Create a new prompts directory with example prompts:
+
+```bash
+# Create in default 'prompts/' directory
+prompteer init
+
+# Create in custom directory
+prompteer init my-prompts
+
+# Overwrite existing directory
+prompteer init prompts --force
+```
+
+The `init` command creates:
+- Basic chat prompts with variables
+- Dynamic routing examples (`[type]` directories)
+- Sample prompts demonstrating all features
+
 ### Generate Type Stubs
 
 ```bash
-# Generate once
-prompteer generate-types <prompts-dir> -o <output.pyi>
+# Default command - can omit 'generate-types'
+prompteer ./prompts -o prompts.pyi
+
+# Or explicitly use generate-types
+prompteer generate-types ./prompts -o prompts.pyi
 
 # Watch mode - auto-regenerate on changes
-prompteer generate-types <prompts-dir> --watch
+prompteer ./prompts --watch
 
 # Specify encoding
-prompteer generate-types <prompts-dir> --encoding utf-8
+prompteer ./prompts --encoding utf-8
 ```
 
 ### Help
@@ -303,10 +413,16 @@ pip install prompteer
 ### Essential Usage Pattern
 
 ```python
+from pathlib import Path
 from prompteer import create_prompts
 
 # 1. Load prompts from directory
+# Option A: Relative to current working directory
 prompts = create_prompts("./prompts")
+
+# Option B: Relative to script file (recommended for packages)
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+prompts = create_prompts(PROMPTS_DIR)
 
 # 2. Access prompts with dot notation
 result = prompts.chat.system(
@@ -317,6 +433,11 @@ result = prompts.chat.system(
 # 3. Use the rendered prompt
 print(result)
 ```
+
+**Important - Path Resolution:**
+- Relative paths are resolved from current working directory (CWD)
+- For library/package usage, use `Path(__file__).parent / "prompts"` pattern
+- This ensures prompts are found regardless of where the host application runs from
 
 ### Prompt File Format
 
@@ -344,6 +465,43 @@ prompts/
 ```
 
 **Key Convention**: `kebab-case` files/directories → `camelCase` Python methods
+
+### Dynamic Routing (v0.2.0+)
+
+Use `[param]` directories for runtime prompt selection:
+
+```
+prompts/
+└── question/
+    └── [type]/              # Dynamic parameter
+        ├── basic/
+        │   └── user.md
+        ├── advanced/
+        │   └── user.md
+        └── default.md       # Fallback
+```
+
+```python
+prompts = create_prompts("./prompts")
+
+# Select different versions based on runtime parameter
+basic = prompts.question.user(type="basic", name="Alice")
+advanced = prompts.question.user(type="advanced", name="Bob", context="expert")
+
+# Automatic fallback to default.md if value doesn't match
+fallback = prompts.question.user(type="expert")  # Uses default.md
+```
+
+**Type safety with Literal types:**
+```python
+# Generated type stub includes available values
+def user(
+    self,
+    type: Literal["basic", "advanced"],  # IDE autocomplete!
+    name: str = "",
+    **kwargs: Any
+) -> str: ...
+```
 
 ### Type Hints (Optional)
 
@@ -400,6 +558,7 @@ Examples available in `examples/` directory:
 - `examples/basic_usage.py` - Basic features
 - `examples/llm_integration.py` - LLM API integration
 - `examples/advanced_usage.py` - Advanced patterns
+- `examples/dynamic_routing.py` - Dynamic routing examples
 
 ---
 
