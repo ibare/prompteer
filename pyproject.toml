@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompteer"
-version = "0.1.0"
+version = "0.2.0"
 description = "A lightweight file-based prompt manager for LLM workflows. Simple, scalable, and version-control friendly."
 readme = "README.md"
 authors = [

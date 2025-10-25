@@ -26,7 +26,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version="%(prog)s 0.2.0",
     )
 
     subparsers = parser.add_subparsers(
@@ -34,10 +34,30 @@ def create_parser() -> argparse.ArgumentParser:
         help="Available commands",
     )
 
-    # generate-types command
+    # init command
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize a new prompts directory with sample prompts",
+        description="Create a prompts directory structure with example prompts including dynamic routing",
+    )
+
+    init_parser.add_argument(
+        "prompts_dir",
+        nargs="?",
+        default="prompts",
+        help="Directory to create (default: prompts)",
+    )
+
+    init_parser.add_argument(
+        "-f", "--force",
+        action="store_true",
+        help="Overwrite existing directory",
+    )
+
+    # generate-types command (default)
     generate_parser = subparsers.add_parser(
         "generate-types",
-        help="Generate Python type stub files from prompt directory",
+        help="Generate Python type stub files from prompt directory (default)",
         description="Scan prompt directory and generate .pyi type stub file for IDE autocompletion",
     )
 
@@ -65,6 +85,168 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Execute init command.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    from pathlib import Path
+    import shutil
+
+    prompts_dir = Path(args.prompts_dir)
+
+    # Check if directory exists
+    if prompts_dir.exists() and not args.force:
+        print(f"[prompteer] Error: Directory already exists: {prompts_dir}")
+        print(f"[prompteer] Use --force to overwrite")
+        return 1
+
+    # Remove existing directory if force flag is set
+    if prompts_dir.exists() and args.force:
+        print(f"[prompteer] Removing existing directory: {prompts_dir}")
+        shutil.rmtree(prompts_dir)
+
+    print(f"[prompteer] Creating prompts directory: {prompts_dir}")
+
+    # Create directory structure
+    # Basic chat prompts
+    chat_dir = prompts_dir / "chat"
+    chat_dir.mkdir(parents=True)
+
+    (chat_dir / "system.md").write_text(
+        """---
+description: System message for chat
+role: AI role description
+personality: AI personality traits
+---
+You are a {role}.
+
+Your personality is {personality}.
+
+Please be helpful, accurate, and respectful in all interactions."""
+    )
+
+    (chat_dir / "user-query.md").write_text(
+        """---
+description: User query message
+question: User's question
+context: Additional context
+---
+Question: {question}
+
+Context: {context}
+
+Please provide a detailed and helpful answer."""
+    )
+
+    # Dynamic routing example - question/[type]
+    question_basic_dir = prompts_dir / "question" / "[type]" / "basic"
+    question_basic_dir.mkdir(parents=True)
+
+    (question_basic_dir / "user.md").write_text(
+        """---
+description: Basic user query
+name: User name
+---
+Hello {name}, this is a basic question. How can I help you today?"""
+    )
+
+    question_advanced_dir = prompts_dir / "question" / "[type]" / "advanced"
+    question_advanced_dir.mkdir(parents=True)
+
+    (question_advanced_dir / "user.md").write_text(
+        """---
+description: Advanced user query
+name: User name
+context: Additional context
+---
+Hello {name}, this is an advanced question.
+
+Context: {context}
+
+I'm here to provide detailed technical assistance. What would you like to know?"""
+    )
+
+    # Default fallback
+    (prompts_dir / "question" / "[type]" / "default.md").write_text(
+        """---
+description: Default fallback question
+---
+This is the default prompt. It's used when the requested type doesn't have a specific implementation."""
+    )
+
+    # Dynamic routing example - chat/[type]
+    chat_friendly_dir = prompts_dir / "chat-dynamic" / "[type]" / "friendly"
+    chat_friendly_dir.mkdir(parents=True)
+
+    (chat_friendly_dir / "user.md").write_text(
+        """---
+description: Friendly chat user message
+message: User message
+---
+{message} 😊"""
+    )
+
+    (chat_friendly_dir / "system.md").write_text(
+        """---
+description: Friendly chat system message
+---
+You are a friendly and approachable AI assistant. Be warm, casual, and helpful!"""
+    )
+
+    chat_professional_dir = prompts_dir / "chat-dynamic" / "[type]" / "professional"
+    chat_professional_dir.mkdir(parents=True)
+
+    (chat_professional_dir / "user.md").write_text(
+        """---
+description: Professional chat user message
+message: User message
+---
+{message}"""
+    )
+
+    (chat_professional_dir / "system.md").write_text(
+        """---
+description: Professional chat system message
+---
+You are a professional AI assistant. Be formal, precise, and maintain a business-appropriate tone."""
+    )
+
+    print(f"[prompteer] ✓ Created directory structure")
+    print(f"[prompteer] ")
+    print(f"[prompteer] Directory structure:")
+    print(f"[prompteer]   {prompts_dir}/")
+    print(f"[prompteer]   ├── chat/")
+    print(f"[prompteer]   │   ├── system.md")
+    print(f"[prompteer]   │   └── user-query.md")
+    print(f"[prompteer]   ├── question/")
+    print(f"[prompteer]   │   └── [type]/")
+    print(f"[prompteer]   │       ├── basic/")
+    print(f"[prompteer]   │       │   └── user.md")
+    print(f"[prompteer]   │       ├── advanced/")
+    print(f"[prompteer]   │       │   └── user.md")
+    print(f"[prompteer]   │       └── default.md")
+    print(f"[prompteer]   └── chat-dynamic/")
+    print(f"[prompteer]       └── [type]/")
+    print(f"[prompteer]           ├── friendly/")
+    print(f"[prompteer]           │   ├── user.md")
+    print(f"[prompteer]           │   └── system.md")
+    print(f"[prompteer]           └── professional/")
+    print(f"[prompteer]               ├── user.md")
+    print(f"[prompteer]               └── system.md")
+    print(f"[prompteer] ")
+    print(f"[prompteer] Next steps:")
+    print(f"[prompteer]   1. Try: python -c \"from prompteer import create_prompts; p = create_prompts('{prompts_dir}'); print(p.chat.system(role='assistant', personality='helpful'))\"")
+    print(f"[prompteer]   2. Generate types: prompteer generate-types {prompts_dir}")
+    print(f"[prompteer]   3. Edit prompts in {prompts_dir}/ to fit your needs")
+
+    return 0
 
 
 def cmd_generate_types(args: argparse.Namespace) -> int:
@@ -208,13 +390,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         Exit code
     """
     parser = create_parser()
+
+    # If no command provided but there's an argument, treat as generate-types (default command)
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Check if first argument is a directory (not a subcommand)
+    if argv and not argv[0].startswith('-') and argv[0] not in ['init', 'generate-types']:
+        # Insert 'generate-types' as the command
+        argv = ['generate-types'] + argv
+
     args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
         return 1
 
-    if args.command == "generate-types":
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "generate-types":
         return cmd_generate_types(args)
 
     # Should not reach here due to subparsers
