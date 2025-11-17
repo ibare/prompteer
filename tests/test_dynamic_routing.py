@@ -181,6 +181,93 @@ class TestDynamicRouting:
         assert "basic" in result.lower()
 
 
+class TestMixedDynamicStaticStructure:
+    """Test mixed structure with both dynamic directories and static files."""
+
+    def test_static_file_alongside_dynamic_directory(self, tmp_path: Path) -> None:
+        """Test accessing static file when dynamic directory exists in same parent."""
+        prompts_dir = tmp_path / "prompts"
+        my_query_dir = prompts_dir / "my-query"
+
+        # Create dynamic structure
+        type_dir = my_query_dir / "[type]"
+        good_dir = type_dir / "good"
+        good_dir.mkdir(parents=True)
+        (good_dir / "system.md").write_text("GOOD system prompt")
+
+        bad_dir = type_dir / "bad"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "system.md").write_text("BAD system prompt")
+
+        # Create static file alongside dynamic directory
+        (my_query_dir / "common.md").write_text("Common prompt")
+
+        prompts = create_prompts(str(prompts_dir))
+
+        # Test static file access
+        result = prompts.myQuery.common()
+        assert result == "Common prompt"
+
+        # Test dynamic routing still works
+        result = prompts.myQuery.system(type="good")
+        assert result == "GOOD system prompt"
+
+        result = prompts.myQuery.system(type="bad")
+        assert result == "BAD system prompt"
+
+    def test_static_directory_alongside_dynamic(self, tmp_path: Path) -> None:
+        """Test accessing static directory when dynamic directory exists."""
+        prompts_dir = tmp_path / "prompts"
+        parent_dir = prompts_dir / "parent"
+
+        # Create dynamic structure
+        type_dir = parent_dir / "[type]"
+        basic_dir = type_dir / "basic"
+        basic_dir.mkdir(parents=True)
+        (basic_dir / "prompt.md").write_text("Basic prompt")
+
+        # Create static directory alongside dynamic
+        static_dir = parent_dir / "static"
+        static_dir.mkdir(parents=True)
+        (static_dir / "file.md").write_text("Static file")
+
+        prompts = create_prompts(str(prompts_dir))
+
+        # Test static directory access (should have priority)
+        result = prompts.parent.static.file()
+        assert result == "Static file"
+
+        # Test dynamic routing still works
+        result = prompts.parent.prompt(type="basic")
+        assert result == "Basic prompt"
+
+    def test_multiple_static_files_with_dynamic(self, tmp_path: Path) -> None:
+        """Test multiple static files coexisting with dynamic directory."""
+        prompts_dir = tmp_path / "prompts"
+        api_dir = prompts_dir / "api"
+
+        # Create dynamic structure
+        version_dir = api_dir / "[version]"
+        v1_dir = version_dir / "v1"
+        v1_dir.mkdir(parents=True)
+        (v1_dir / "endpoint.md").write_text("V1 endpoint")
+
+        # Create multiple static files
+        (api_dir / "health.md").write_text("Health check")
+        (api_dir / "status.md").write_text("Status check")
+        (api_dir / "info.md").write_text("API info")
+
+        prompts = create_prompts(str(prompts_dir))
+
+        # Test all static files are accessible
+        assert prompts.api.health() == "Health check"
+        assert prompts.api.status() == "Status check"
+        assert prompts.api.info() == "API info"
+
+        # Test dynamic routing still works
+        assert prompts.api.endpoint(version="v1") == "V1 endpoint"
+
+
 class TestDynamicRoutingEdgeCases:
     """Test edge cases for dynamic routing."""
 

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-11-17
+
+### Fixed
+- **Priority order for mixed static and dynamic files** - Static directories and files are now checked before dynamic directories
+- Dynamic directories no longer override static files in the same parent directory
+
+### Changed
+- `PromptProxy.__getattr__()` now prioritizes static content over dynamic routing
+- Improved resolution logic to support mixed file structures
+
+### Added
+- Support for combining dynamic `[param]` directories with static files in the same directory
+- Three new test cases for mixed dynamic/static structure scenarios
+- Documentation for mixed static and dynamic file usage in README
+
+### Technical Details
+- Modified `proxy.py:47-85` to reorder attribute resolution priority
+- Test coverage improved from 58% to 70%
+- All 91 tests passing with no regressions
+
+### Example
+You can now use this structure:
+```
+my-query/
+  ├── [type]/
+  │   ├── good/system.md
+  │   └── bad/system.md
+  ├── common.md         # Now accessible via myQuery.common()
+  └── helper.md         # Now accessible via myQuery.helper()
+```
+
 ## [0.2.0] - 2025-10-24
 
 ### Added
