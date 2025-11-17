@@ -196,6 +196,44 @@ fallback = prompts.question.user(type="expert")  # Uses default.md
 3. `default.md` = fallback when value doesn't match any directory
 4. If no default.md exists, raises `PromptNotFoundError`
 
+### Mixed Static and Dynamic Files
+
+You can combine dynamic directories with static files in the same directory:
+
+**File Structure:**
+```
+prompts/
+└── my-query/
+    ├── [type]/              # Dynamic routing
+    │   ├── good/
+    │   │   └── system.md
+    │   └── bad/
+    │       └── system.md
+    ├── common.md            # Static file
+    └── helper.md            # Another static file
+```
+
+**Usage:**
+```python
+from prompteer import create_prompts
+
+prompts = create_prompts("./prompts")
+
+# Access static files directly (no type parameter needed)
+common = prompts.myQuery.common()
+helper = prompts.myQuery.helper()
+
+# Dynamic routing still works
+good_system = prompts.myQuery.system(type="good")
+bad_system = prompts.myQuery.system(type="bad")
+```
+
+**Priority Order:**
+1. Static directories and files are checked first
+2. Dynamic directories are used as fallback
+
+This allows you to have shared/common prompts alongside type-specific ones.
+
 ### Type Hints with Dynamic Routing
 
 Generate type stubs to get IDE autocomplete for available values:

@@ -59,12 +59,6 @@ class PromptProxy:
         # Convert camelCase attribute to kebab-case path
         path_name = camel_to_kebab(name)
 
-        # Check for dynamic directories first
-        for item in self._current_path.iterdir():
-            if item.is_dir() and is_dynamic_dir(item.name):
-                # Found a dynamic directory - return dynamic callable
-                return self._create_dynamic_callable(item, name)
-
         # Try as directory first
         dir_path = self._current_path / path_name
         if dir_path.is_dir():
@@ -75,6 +69,12 @@ class PromptProxy:
         if file_path.is_file():
             # Return a callable that renders the prompt
             return self._create_prompt_callable(file_path)
+
+        # Check for dynamic directories as fallback
+        for item in self._current_path.iterdir():
+            if item.is_dir() and is_dynamic_dir(item.name):
+                # Found a dynamic directory - return dynamic callable
+                return self._create_dynamic_callable(item, name)
 
         # Not found
         relative_path = self._current_path.relative_to(self._base_path)
