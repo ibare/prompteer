@@ -37,6 +37,9 @@ class VariableInfo:
             "string": "str",
             "boolean": "bool",
             "number": "number",  # Keep as number for Union[int, float]
+            # Aliases for list/object types
+            "array": "list",
+            "dict": "object",
         }
         self.type = type_mapping.get(self.type, self.type)
 
@@ -230,6 +233,10 @@ def get_type_default(var_type: str) -> Any:
         0.0
         >>> get_type_default("bool")
         False
+        >>> get_type_default("list")
+        []
+        >>> get_type_default("object")
+        {}
     """
     defaults = {
         "str": "",
@@ -238,5 +245,10 @@ def get_type_default(var_type: str) -> Any:
         "bool": False,
         "number": 0,
         "any": None,
+        # New types for v0.3.0
+        "list": [],
+        "object": {},
+        "dict": {},  # Alias for object
+        "array": [],  # Alias for list
     }
     return defaults.get(var_type, None)

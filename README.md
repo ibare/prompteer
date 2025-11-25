@@ -155,7 +155,194 @@ Supported types:
 - `float`
 - `bool`
 - `number` (int or float)
+- `list` - array/list of items (v0.3.0+)
+- `object` - dictionary/object (v0.3.0+)
 - `any`
+
+## Conditional and Loop Blocks (v0.3.0+)
+
+Create dynamic prompts with conditional content and loops using a simple, Handlebars-inspired syntax.
+
+### Conditional Blocks
+
+Show or hide content based on conditions:
+
+```markdown
+---
+description: Greeting prompt
+formal(bool): Use formal greeting
+name: User name
+---
+Hello{#if formal}, Dear{/if} {name}!
+
+{#if formal}
+We hope this message finds you well.
+{#else}
+How's it going?
+{/if}
+```
+
+**Usage:**
+```python
+prompts = create_prompts("./prompts")
+
+# Formal greeting
+formal = prompts.greeting(formal=True, name="Dr. Smith")
+# Output: Hello, Dear Dr. Smith!
+# We hope this message finds you well.
+
+# Casual greeting
+casual = prompts.greeting(formal=False, name="John")
+# Output: Hello John!
+# How's it going?
+```
+
+### Comparison Operators
+
+Use `==` and `!=` for value comparisons:
+
+```markdown
+{#if role == "admin"}
+You have full access to all features.
+{/if}
+
+{#if status != "active"}
+Your account is currently inactive.
+{/if}
+```
+
+### Negation
+
+Use `not` to invert conditions:
+
+```markdown
+{#if not authenticated}
+Please log in to continue.
+{/if}
+```
+
+### Loop Blocks
+
+Iterate over lists with `{#for}`:
+
+```markdown
+---
+description: Task list prompt
+tasks(list): List of tasks
+---
+## Your Tasks
+
+{#for task in tasks}
+- [ ] {task}
+{/for}
+```
+
+**Usage:**
+```python
+result = prompts.taskList(tasks=["Review code", "Write tests", "Update docs"])
+# Output:
+# ## Your Tasks
+# - [ ] Review code
+# - [ ] Write tests
+# - [ ] Update docs
+```
+
+### Loop with Index
+
+Access the iteration index:
+
+```markdown
+{#for item, index in items}
+{index}. {item}
+{/for}
+```
+
+### Object Properties (Dot Notation)
+
+Access nested object properties:
+
+```markdown
+---
+description: User list
+users(list): List of user objects
+---
+## Team Members
+
+{#for user in users}
+### {user.name}
+- Role: {user.role}
+- Email: {user.email}
+{/for}
+```
+
+**Usage:**
+```python
+result = prompts.team.members(users=[
+    {"name": "Alice", "role": "Developer", "email": "alice@example.com"},
+    {"name": "Bob", "role": "Designer", "email": "bob@example.com"},
+])
+```
+
+### Nested Blocks
+
+Combine conditions and loops:
+
+```markdown
+---
+description: Code review prompt
+show_checklist(bool): Show review checklist
+checklist(list): Review items
+code: Code to review
+---
+Please review the following code:
+
+```python
+{code}
+```
+
+{#if show_checklist}
+## Review Checklist
+{#for item in checklist}
+- [ ] {item.category}: {item.description}
+{/for}
+{/if}
+```
+
+**Usage:**
+```python
+result = prompts.codeReview.request(
+    code="def hello(): pass",
+    show_checklist=True,
+    checklist=[
+        {"category": "Style", "description": "Check naming conventions"},
+        {"category": "Logic", "description": "Verify edge cases"},
+        {"category": "Security", "description": "Review input validation"},
+    ]
+)
+```
+
+### Conditional Content in Loops
+
+Use conditions inside loops:
+
+```markdown
+{#for user in users}
+{user.name}{#if user.admin} (Admin){/if}
+{/for}
+```
+
+### Block Syntax Reference
+
+| Syntax | Description |
+|--------|-------------|
+| `{#if condition}...{/if}` | Conditional block |
+| `{#if not condition}...{/if}` | Negated condition |
+| `{#if var == "value"}...{/if}` | Equality check |
+| `{#if var != "value"}...{/if}` | Inequality check |
+| `{#if condition}...{#else}...{/if}` | If-else block |
+| `{#for item in list}...{/for}` | Loop block |
+| `{#for item, index in list}...{/for}` | Loop with index |
+| `{object.property}` | Dot notation access |
 
 ## Dynamic Routing
 
@@ -590,7 +777,32 @@ In YAML frontmatter:
 - `score(float): description` - float
 - `active(bool): description` - boolean
 - `count(number): description` - int or float
+- `items(list): description` - list/array (v0.3.0+)
+- `config(object): description` - dictionary/object (v0.3.0+)
 - `data(any): description` - any type
+
+### Conditional and Loop Blocks (v0.3.0+)
+
+Use `{#if}`, `{#for}`, and `{#else}` for dynamic content:
+
+```markdown
+{#if show_examples}
+## Examples
+{#for item in examples}
+- {item.title}: {item.description}
+{/for}
+{/if}
+```
+
+```python
+prompts.myPrompt(
+    show_examples=True,
+    examples=[
+        {"title": "Example 1", "description": "First example"},
+        {"title": "Example 2", "description": "Second example"},
+    ]
+)
+```
 
 ### Testing
 
@@ -599,6 +811,7 @@ Examples available in `examples/` directory:
 - `examples/llm_integration.py` - LLM API integration
 - `examples/advanced_usage.py` - Advanced patterns
 - `examples/dynamic_routing.py` - Dynamic routing examples
+- `examples/blocks_usage.py` - Conditional and loop blocks (v0.3.0+)
 
 ---
 

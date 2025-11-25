@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-11-25
+
+### Added
+- **Conditional blocks** - `{#if condition}...{/if}` syntax for conditional content
+- **Loop blocks** - `{#for item in items}...{/for}` syntax for iterating over collections
+- **Else clause** - `{#if condition}...{#else}...{/if}` for alternative content
+- **Comparison operators** - `{#if var == "value"}` and `{#if var != "value"}` support
+- **Negation** - `{#if not condition}` for inverted conditions
+- **Dot notation in conditions** - `{#if item.active}` for nested property checks
+- **Loop index** - `{#for item, index in items}` to access iteration index
+- **Dot notation variables** - `{user.name}` syntax for accessing nested object properties
+- **New types** - `list` and `object` types in YAML frontmatter metadata
+- **Type aliases** - `array` (alias for list), `dict` (alias for object)
+- **Nested blocks** - Full support for blocks inside blocks (e.g., `{#if}` inside `{#for}`)
+- `blocks.py` module with `parse_blocks()` and `render_blocks()` functions
+- `BlockSyntaxError` exception for invalid block syntax
+- 43 new test cases for block functionality
+
+### Changed
+- `render_template()` now processes blocks before variable substitution
+- `render_template_with_defaults()` supports block syntax
+- `validate_template()` validates block syntax
+- `extract_variables()` excludes block keywords from variable detection
+- Type stub generator supports `list[Any]` and `dict[str, Any]` types
+- Test coverage increased to 74% with 134 total tests
+
+### Technical Details
+- New `blocks.py` module implements recursive descent parser for block syntax
+- Block types: `TextBlock`, `IfBlock`, `ForBlock` as dataclasses
+- `resolve_value()` function for dot notation property access
+- `_substitute_text_variables()` for variable substitution within blocks
+
+### Example
+```markdown
+---
+description: Dynamic prompt with conditions and loops
+show_examples(bool): Include examples
+items(list): List of items to process
+---
+
+{#if show_examples}
+## Examples
+{#for item in items}
+- {item.name}: {item.description}
+{/for}
+{/if}
+
+{#if tone == "formal"}
+Please maintain a professional tone.
+{#else}
+Feel free to be casual.
+{/if}
+```
+
+```python
+prompts.myPrompt(
+    show_examples=True,
+    items=[
+        {"name": "Example 1", "description": "First example"},
+        {"name": "Example 2", "description": "Second example"},
+    ],
+    tone="formal"
+)
+```
+
 ## [0.2.1] - 2025-11-17
 
 ### Fixed
@@ -97,5 +162,7 @@ my-query/
 - Type stub generator with full type hints
 - Template rendering with defaults
 
+[0.3.0]: https://github.com/ibare/prompteer/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/ibare/prompteer/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ibare/prompteer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ibare/prompteer/releases/tag/v0.1.0
