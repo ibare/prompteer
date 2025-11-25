@@ -30,6 +30,10 @@ def get_python_type(yaml_type: str) -> str:
         'int'
         >>> get_python_type("number")
         'Union[int, float]'
+        >>> get_python_type("list")
+        'list[Any]'
+        >>> get_python_type("object")
+        'dict[str, Any]'
     """
     type_mapping = {
         "str": "str",
@@ -38,6 +42,11 @@ def get_python_type(yaml_type: str) -> str:
         "bool": "bool",
         "number": "Union[int, float]",
         "any": "Any",
+        # New types for v0.3.0
+        "list": "list[Any]",
+        "object": "dict[str, Any]",
+        "dict": "dict[str, Any]",
+        "array": "list[Any]",
     }
     return type_mapping.get(yaml_type, "Any")
 
@@ -56,6 +65,10 @@ def get_default_value(yaml_type: str) -> str:
         '""'
         >>> get_default_value("int")
         '0'
+        >>> get_default_value("list")
+        '[]'
+        >>> get_default_value("object")
+        '{}'
     """
     defaults = {
         "str": '""',
@@ -64,6 +77,11 @@ def get_default_value(yaml_type: str) -> str:
         "bool": "False",
         "number": "0",
         "any": "None",
+        # New types for v0.3.0
+        "list": "[]",
+        "object": "{}",
+        "dict": "{}",
+        "array": "[]",
     }
     return defaults.get(yaml_type, "None")
 
