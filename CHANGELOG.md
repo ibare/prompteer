@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   나오던 자리에 값이 들어간다.
 - 내부 함수 `template._substitute_variables()`, `blocks._substitute_text_variables()`
   가 `blocks.substitute_variables()` 로 통합·제거됐다.
+- **지원 Python 하한이 3.9 로 올라간다** (기존 선언: 3.7). 3.7 은 검증 수단이 없고
+  (uv·GitHub 러너 모두 제공하지 않음), 3.8 은 2024-10 EOL 이다. 3.9~3.13 은 CI
+  매트릭스로 검증한다.
+
+### Infrastructure
+- GitHub Actions CI 도입 (`.github/workflows/test.yml`) - push/PR 마다 Python
+  3.9~3.13 매트릭스로 테스트·doctest·예시 실행을 검증한다.
+- PyPI 배포 자동화 (`.github/workflows/release.yml`) - `v*` 태그 push 로만 배포되며,
+  Trusted Publishing (OIDC) 을 쓰므로 API 토큰을 보관하지 않는다. 태그와 패키지
+  버전이 다르면 빌드가 실패한다.
 
 ### Known limitations
 - 블록 태그는 이스케이프할 수 없다. `{{#if x}}` 는 여전히 블록으로 파싱된다.

@@ -218,14 +218,32 @@ active(bool): Is active
 
 ## Release Process
 
-1. Update version in `src/prompteer/__init__.py` and `pyproject.toml`
+Releases are automated. Pushing a `v*` tag is the only action that publishes to
+PyPI — see `.github/workflows/release.yml`.
+
+1. Update version in `src/prompteer/__init__.py` and `pyproject.toml` (both must
+   match the tag; the workflow fails the build if they disagree)
 2. Update `CHANGELOG.md` with new version and changes
-3. Run tests: `pytest`
-4. Build: `python -m build`
-5. Check: `twine check dist/*`
-6. Tag: `git tag -a v0.x.x -m "Release v0.x.x"`
-7. Push: `git push && git push --tags`
-8. Upload to PyPI: `twine upload dist/*`
+3. Run tests locally: `pytest`
+4. Merge to `main` (CI runs the full matrix on the PR)
+5. Tag: `git tag -a v0.x.x -m "Release v0.x.x"`
+6. Push: `git push && git push --tags`
+
+The tag push triggers: matrix tests → version check → build → `twine check` →
+PyPI upload via Trusted Publishing → GitHub release.
+
+**No API token is involved.** Publishing uses PyPI Trusted Publishing (OIDC),
+configured on PyPI under the project's Publishing settings:
+
+| Field | Value |
+|-------|-------|
+| Owner | `ibare` |
+| Repository | `prompteer` |
+| Workflow name | `release.yml` |
+| Environment | `pypi` |
+
+Manual `twine upload` is no longer part of the process. Building locally
+(`python -m build`) is still useful for inspecting artifacts before tagging.
 
 ## Common Development Tasks
 
