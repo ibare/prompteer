@@ -1,6 +1,6 @@
 # prompteer
 
-[![PyPI version](https://badge.fury.io/py/prompteer.svg)](https://badge.fury.io/py/prompteer) [![PyPI status](https://img.shields.io/pypi/status/prompteer.svg)](https://pypi.python.org/pypi/prompteer/) [![PyPI - Downloads](https://img.shields.io/pypi/dm/prompteer)](https://pypi.org/project/prompteer/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) 
+[![PyPI version](https://img.shields.io/pypi/v/prompteer)](https://pypi.org/project/prompteer/) [![PyPI status](https://img.shields.io/pypi/status/prompteer)](https://pypi.org/project/prompteer/) [![PyPI - Downloads](https://img.shields.io/pypi/dm/prompteer)](https://pypi.org/project/prompteer/) [![Python versions](https://img.shields.io/pypi/pyversions/prompteer)](https://pypi.org/project/prompteer/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](https://opensource.org/licenses/MIT) 
   
 A lightweight file-based prompt manager for LLM workflows. Simple, scalable, and version-control friendly.
 
