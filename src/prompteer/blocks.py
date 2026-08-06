@@ -70,6 +70,15 @@ FOR_PATTERN = re.compile(
     r"^(\w+)(?:\s*,\s*(\w+))?\s+in\s+(\w+)$"
 )
 
+# 변수 참조와 이스케이프를 한 번의 스캔으로 함께 소비하는 통합 패턴.
+# {{ 와 }} 를 같은 패스에서 리터럴로 흡수하므로, 언이스케이프된 결과가
+# 다시 변수로 해석되는 경로가 존재하지 않는다.
+VARIABLE_PATTERN = re.compile(r"\{\{|\}\}|\{(\w+(?:\.\w+)*)\}")
+
+# 블록 태그 키워드. 텍스트에 {if} 처럼 단독으로 나타나면 변수가 아니라
+# 리터럴로 취급한다.
+BLOCK_KEYWORDS = frozenset({"if", "for", "else"})
+
 
 def parse_blocks(template: str) -> List[Block]:
     """Parse a template string into a list of blocks.
@@ -353,40 +362,79 @@ def _evaluate_condition(
     return result
 
 
-def _substitute_text_variables(
-    text: str, variables: dict[str, Any], local_vars: dict[str, Any]
+def substitute_variables(
+    text: str,
+    variables: dict[str, Any],
+    local_vars: dict[str, Any] | None = None,
+    *,
+    missing: set[str] | None = None,
+    missing_default: str | None = None,
 ) -> str:
-    """Substitute variables in a text block.
+    """텍스트의 변수 참조를 단일 패스로 치환한다.
+
+    이 함수는 prompteer 의 유일한 치환 구현이다. 텍스트를 정확히 한 번만
+    훑으며, 치환으로 만들어진 출력은 같은 패스 안에서 다시 검사되지 않는다.
+    따라서 주입값 안에 들어 있는 중괄호는 변수로 해석되지 않는다.
 
     Args:
-        text: Text with {variable} placeholders
-        variables: Global variables
-        local_vars: Local variables (from for loops)
+        text: {variable} 자리표시자를 포함한 텍스트
+        variables: 전역 변수
+        local_vars: 지역 변수 (for 루프에서 전달)
+        missing: 해결하지 못한 변수 이름을 수집할 집합. None 이면 수집하지 않는다.
+        missing_default: 해결하지 못한 변수를 대체할 문자열.
+            None 이면 자리표시자를 원문 그대로 남긴다.
 
     Returns:
-        Text with variables substituted
-    """
-    import re
+        변수가 치환된 텍스트
 
-    # Match both {word} and {word.word...} patterns
-    pattern = r"\{(\w+(?:\.\w+)*)\}"
+    Examples:
+        >>> substitute_variables("Hello {name}", {"name": "Alice"})
+        'Hello Alice'
+        >>> substitute_variables("A: {a}", {"a": "x {foo} y"})
+        'A: x {foo} y'
+        >>> substitute_variables("{{literal}}", {})
+        '{literal}'
+    """
+    if local_vars is None:
+        local_vars = {}
 
     def replacer(match: re.Match) -> str:
-        var_name = match.group(1)
-        try:
-            value = resolve_value(var_name, variables, local_vars)
-            return str(value)
-        except TemplateVariableError:
-            # If variable not found, leave placeholder as-is
-            return match.group(0)
+        token = match.group(0)
 
-    return re.sub(pattern, replacer, text)
+        # 이스케이프: 리터럴 중괄호로 환원하고 그대로 확정한다.
+        if token == "{{":
+            return "{"
+        if token == "}}":
+            return "}"
+
+        var_name = match.group(1)
+
+        # 블록 키워드는 변수가 아니므로 원문 유지
+        if var_name in BLOCK_KEYWORDS:
+            return token
+
+        try:
+            return str(resolve_value(var_name, variables, local_vars))
+        except TemplateVariableError:
+            # 미해결 변수는 이 지점에서만 알 수 있다. 렌더 결과를 다시
+            # 훑어서는 템플릿에서 온 자리표시자와 주입값에서 온 중괄호를
+            # 구분할 수 없으므로, 판정에 필요한 정보를 여기서 수집한다.
+            if missing is not None:
+                missing.add(var_name)
+            if missing_default is not None:
+                return missing_default
+            return token
+
+    return VARIABLE_PATTERN.sub(replacer, text)
 
 
 def render_blocks(
     blocks: List[Block],
     variables: dict[str, Any],
     local_vars: dict[str, Any] | None = None,
+    *,
+    missing: set[str] | None = None,
+    missing_default: str | None = None,
 ) -> str:
     """Render a list of blocks to a string.
 
@@ -411,19 +459,35 @@ def render_blocks(
     for block in blocks:
         if isinstance(block, TextBlock):
             # Substitute variables in text content
-            rendered_text = _substitute_text_variables(
-                block.content, variables, local_vars
+            rendered_text = substitute_variables(
+                block.content,
+                variables,
+                local_vars,
+                missing=missing,
+                missing_default=missing_default,
             )
             result_parts.append(rendered_text)
 
         elif isinstance(block, IfBlock):
             if _evaluate_condition(block, variables, local_vars):
                 result_parts.append(
-                    render_blocks(block.then_blocks, variables, local_vars)
+                    render_blocks(
+                        block.then_blocks,
+                        variables,
+                        local_vars,
+                        missing=missing,
+                        missing_default=missing_default,
+                    )
                 )
             elif block.else_blocks:
                 result_parts.append(
-                    render_blocks(block.else_blocks, variables, local_vars)
+                    render_blocks(
+                        block.else_blocks,
+                        variables,
+                        local_vars,
+                        missing=missing,
+                        missing_default=missing_default,
+                    )
                 )
 
         elif isinstance(block, ForBlock):
@@ -445,7 +509,13 @@ def render_blocks(
                     loop_vars[block.index_name] = index
 
                 result_parts.append(
-                    render_blocks(block.body_blocks, variables, loop_vars)
+                    render_blocks(
+                        block.body_blocks,
+                        variables,
+                        loop_vars,
+                        missing=missing,
+                        missing_default=missing_default,
+                    )
                 )
 
     return "".join(result_parts)

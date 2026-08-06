@@ -10,7 +10,7 @@ This example demonstrates:
 
 from pathlib import Path
 
-from prompteer import PromptNotFoundError, create_prompts
+from prompteer import Prompteer, PromptNotFoundError, create_prompts
 
 # Get prompts directory relative to this file (not CWD)
 PROMPTS_DIR = Path(__file__).parent / "prompts"
