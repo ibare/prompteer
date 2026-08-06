@@ -3,6 +3,15 @@ Template engine for prompteer.
 
 Handles variable substitution in prompt templates using {variable} syntax.
 Also supports block syntax: {#if}, {#for}, {#else}, {/if}, {/for}.
+
+핵심 불변식:
+    템플릿 텍스트는 정확히 한 번만 스캔된다. 치환으로 만들어진 출력은
+    어떤 단계에서도 다시 변수로 해석되지 않는다.
+
+    이 불변식 덕분에 주입값 안에 들어 있는 중괄호(예: "React {children} 사용법")
+    는 미해결 변수로 오인되지 않는다. 미해결 변수 판정에 필요한 정보는
+    치환이 일어나는 지점에서만 정확하므로, 렌더 결과를 다시 훑는 대신
+    substitute_variables 가 수집한 집합으로 판정한다.
 """
 
 from __future__ import annotations
@@ -11,18 +20,31 @@ import re
 from typing import Any
 
 from prompteer.blocks import (
+    BLOCK_KEYWORDS,
+    VARIABLE_PATTERN,
     BlockSyntaxError,
     parse_blocks,
     render_blocks,
     resolve_value,
+    substitute_variables,
 )
 from prompteer.exceptions import TemplateVariableError
 
+__all__ = [
+    "extract_variables",
+    "extract_all_variables",
+    "render_template",
+    "render_template_safe",
+    "render_template_with_defaults",
+    "validate_template",
+]
+
 
 def extract_variables(template: str) -> set[str]:
-    """Extract all variable names from a template.
+    """Extract all simple variable names from a template.
 
-    Excludes block syntax ({#if}, {#for}, {/if}, {/for}, {#else}).
+    점 표기 변수({user.name})와 이스케이프된 리터럴({{name}}), 블록 문법은
+    제외한다.
 
     Args:
         template: Template string with {variable} placeholders
@@ -33,28 +55,27 @@ def extract_variables(template: str) -> set[str]:
     Examples:
         >>> extract_variables("Hello {name}!")
         {'name'}
-        >>> extract_variables("Hello {name}, you are {age} years old")
-        {'name', 'age'}
+        >>> sorted(extract_variables("Hello {name}, you are {age} years old"))
+        ['age', 'name']
         >>> extract_variables("No variables here")
         set()
         >>> extract_variables("{#if show}Hello{/if}")
         set()
+        >>> extract_variables("{{name}}")
+        set()
     """
-    # Find all {variable} patterns, excluding block syntax
-    # Match {word} but not {#word}, {/word}, or {word.property}
-    pattern = r"\{(\w+)\}"
-    matches = re.findall(pattern, template)
-
-    # Filter out block keywords
-    block_keywords = {"if", "for", "else"}
-    return {m for m in matches if m not in block_keywords}
+    return {
+        name
+        for name in _iter_variable_names(template)
+        if "." not in name and name not in BLOCK_KEYWORDS
+    }
 
 
 def extract_all_variables(template: str) -> set[str]:
     """Extract all variable names including dot notation from a template.
 
     This includes both simple variables {name} and dot notation {user.name}.
-    Excludes block syntax ({#if}, {#for}, etc.).
+    이스케이프된 리터럴({{name}})과 블록 문법은 제외한다.
 
     Args:
         template: Template string with {variable} placeholders
@@ -67,21 +88,22 @@ def extract_all_variables(template: str) -> set[str]:
         {'user'}
         >>> extract_all_variables("{item.title} by {item.author}")
         {'item'}
+        >>> extract_all_variables("{{user.name}}")
+        set()
     """
-    # Match both {word} and {word.word.word...} patterns
-    pattern = r"\{(\w+(?:\.\w+)*)\}"
-    matches = re.findall(pattern, template)
+    return {
+        name.split(".")[0]
+        for name in _iter_variable_names(template)
+        if name.split(".")[0] not in BLOCK_KEYWORDS
+    }
 
-    # Extract root variable names (before first dot)
-    root_vars = set()
-    block_keywords = {"if", "for", "else"}
 
-    for match in matches:
-        root = match.split(".")[0]
-        if root not in block_keywords:
-            root_vars.add(root)
+def _iter_variable_names(template: str) -> list[str]:
+    """통합 패턴으로 템플릿을 훑어 변수 이름만 뽑는다.
 
-    return root_vars
+    이스케이프 토큰({{, }})은 group(1) 이 None 이므로 자연히 걸러진다.
+    """
+    return [m.group(1) for m in VARIABLE_PATTERN.finditer(template) if m.group(1)]
 
 
 def _has_blocks(template: str) -> bool:
@@ -89,40 +111,46 @@ def _has_blocks(template: str) -> bool:
     return "{#if" in template or "{#for" in template
 
 
-def _substitute_variables(
-    text: str,
+def _render(
+    template: str,
     variables: dict[str, Any],
-    local_vars: dict[str, Any] | None = None,
-) -> str:
-    """Substitute variables in text, supporting dot notation.
+    missing_default: str | None = None,
+) -> tuple[str, set[str]]:
+    """템플릿을 단일 패스로 렌더하고 (결과, 미해결 변수) 를 돌려준다.
 
-    Args:
-        text: Text with {variable} placeholders
-        variables: Global variables
-        local_vars: Local variables (from for loops)
-
-    Returns:
-        Text with variables substituted
+    블록이 있는 템플릿은 parse_blocks 가 블록 밖 텍스트까지 TextBlock 으로
+    포함하므로, render_blocks 한 번으로 모든 치환이 끝난다. 결과 문자열에
+    대한 추가 치환 패스는 존재하지 않는다.
     """
-    if local_vars is None:
-        local_vars = {}
+    missing: set[str] = set()
 
-    # Match both {word} and {word.word...} patterns, but not block syntax
-    pattern = r"\{(\w+(?:\.\w+)*)\}"
+    if _has_blocks(template):
+        result = render_blocks(
+            parse_blocks(template),
+            variables,
+            missing=missing,
+            missing_default=missing_default,
+        )
+    else:
+        result = substitute_variables(
+            template,
+            variables,
+            missing=missing,
+            missing_default=missing_default,
+        )
 
-    def replacer(match: re.Match) -> str:
-        var_name = match.group(1)
-        # Skip block keywords
-        if var_name in ("if", "for", "else"):
-            return match.group(0)
-        try:
-            value = resolve_value(var_name, variables, local_vars)
-            return str(value)
-        except TemplateVariableError:
-            # If variable not found, leave placeholder as-is for later error
-            return match.group(0)
+    return result, missing
 
-    return re.sub(pattern, replacer, text)
+
+def _raise_missing(missing: set[str], suffix: str = "") -> None:
+    """미해결 변수가 있으면 TemplateVariableError 를 던진다."""
+    if not missing:
+        return
+    missing_list = ", ".join(sorted(missing))
+    raise TemplateVariableError(
+        variable=missing_list,
+        message=f"Missing required variables{suffix}: {missing_list}",
+    )
 
 
 def render_template(template: str, variables: dict[str, Any]) -> str:
@@ -133,6 +161,9 @@ def render_template(template: str, variables: dict[str, Any]) -> str:
     - Dot notation: {user.name}
     - Conditional blocks: {#if condition}...{/if}
     - Loop blocks: {#for item in items}...{/for}
+    - Escaped literals: {{name}} renders as {name}
+
+    주입값 안의 중괄호는 변수로 해석되지 않는다.
 
     Args:
         template: Template string with {variable} placeholders and blocks
@@ -154,26 +185,11 @@ def render_template(template: str, variables: dict[str, Any]) -> str:
         'Hello'
         >>> render_template("{#for x in items}{x}{/for}", {"items": [1, 2, 3]})
         '123'
+        >>> render_template("A: {a}", {"a": "x {foo} y"})
+        'A: x {foo} y'
     """
-    # Process blocks first if present
-    if _has_blocks(template):
-        blocks = parse_blocks(template)
-        result = render_blocks(blocks, variables)
-        # Substitute remaining variables
-        result = _substitute_variables(result, variables)
-    else:
-        # Simple variable substitution
-        result = _substitute_variables(template, variables)
-
-    # Check for unsubstituted variables (excluding block keywords)
-    remaining_vars = extract_variables(result)
-    if remaining_vars:
-        missing_list = ", ".join(sorted(remaining_vars))
-        raise TemplateVariableError(
-            variable=missing_list,
-            message=f"Missing required variables: {missing_list}",
-        )
-
+    result, missing = _render(template, variables)
+    _raise_missing(missing)
     return result
 
 
@@ -181,6 +197,9 @@ def render_template_safe(
     template: str, variables: dict[str, Any], default: str = ""
 ) -> str:
     """Render a template with safe fallback for missing variables.
+
+    render_template 과 동일한 단일 패스 파이프라인을 쓰므로 점 표기 변수도
+    치환되고, 치환 순서에 따라 결과가 달라지지 않는다.
 
     Args:
         template: Template string with {variable} placeholders
@@ -195,26 +214,10 @@ def render_template_safe(
         'Hello !'
         >>> render_template_safe("Hello {name}!", {}, default="Guest")
         'Hello Guest!'
+        >>> render_template_safe("{user.name}", {"user": {"name": "Bob"}})
+        'Bob'
     """
-    # Process blocks first if present
-    if _has_blocks(template):
-        blocks = parse_blocks(template)
-        result = render_blocks(blocks, variables)
-    else:
-        result = template
-
-    # Find all variables in result
-    required_vars = extract_variables(result)
-
-    # Build complete variables dict with defaults
-    complete_vars = {var: default for var in required_vars}
-    complete_vars.update(variables)
-
-    # Substitute
-    for var_name, value in complete_vars.items():
-        placeholder = "{" + var_name + "}"
-        result = result.replace(placeholder, str(value))
-
+    result, _ = _render(template, variables, missing_default=default)
     return result
 
 
@@ -230,6 +233,7 @@ def render_template_with_defaults(
     - Dot notation: {user.name}
     - Conditional blocks: {#if condition}...{/if}
     - Loop blocks: {#for item in items}...{/for}
+    - Escaped literals: {{name}} renders as {name}
 
     Args:
         template: Template string with {variable} placeholders
@@ -250,35 +254,15 @@ def render_template_with_defaults(
         ...     {"age": 0}
         ... )
         'Hello Alice, age 0'
+        >>> render_template_with_defaults("A: {a}", {"a": "x {foo} y"}, {})
+        'A: x {foo} y'
     """
-    if defaults is None:
-        defaults = {}
+    # defaults 는 치환 이전에 병합되므로, 여기서 해결되지 않은 이름은
+    # 기본값으로도 채울 수 없는 진짜 누락이다.
+    merged_vars = {**(defaults or {}), **variables}
 
-    # Merge variables with defaults (variables take precedence)
-    merged_vars = {**defaults, **variables}
-
-    # Process blocks first if present
-    if _has_blocks(template):
-        blocks = parse_blocks(template)
-        result = render_blocks(blocks, merged_vars)
-        # Substitute remaining simple variables
-        result = _substitute_variables(result, merged_vars)
-    else:
-        # Simple variable substitution
-        result = _substitute_variables(template, merged_vars)
-
-    # Check for unsubstituted variables
-    remaining_vars = extract_variables(result)
-    if remaining_vars:
-        # Check which ones are truly missing (not in defaults either)
-        missing_vars = [v for v in remaining_vars if v not in merged_vars]
-        if missing_vars:
-            missing_list = ", ".join(sorted(missing_vars))
-            raise TemplateVariableError(
-                variable=missing_list,
-                message=f"Missing required variables (no defaults): {missing_list}",
-            )
-
+    result, missing = _render(template, merged_vars)
+    _raise_missing(missing, suffix=" (no defaults)")
     return result
 
 
@@ -295,13 +279,18 @@ def validate_template(template: str) -> tuple[bool, str | None]:
         >>> validate_template("Hello {name}!")
         (True, None)
         >>> validate_template("Hello {name!")
-        (False, 'Unclosed brace at position ...')
+        (False, 'Unmatched braces: 1 open, 0 close')
         >>> validate_template("{#if show}Hello{/if}")
         (True, None)
+        >>> validate_template("{{name}}")
+        (True, None)
     """
+    # 이스케이프된 중괄호는 리터럴이므로 검사 대상에서 제외한다.
+    scannable = template.replace("{{", "").replace("}}", "")
+
     # Check for unmatched braces
-    open_count = template.count("{")
-    close_count = template.count("}")
+    open_count = scannable.count("{")
+    close_count = scannable.count("}")
 
     if open_count != close_count:
         return False, f"Unmatched braces: {open_count} open, {close_count} close"
@@ -319,7 +308,7 @@ def validate_template(template: str) -> tuple[bool, str | None]:
         r"^\{(\w+(?:\.\w+)*|#(?:if|for|else)\s*.*?|/(?:if|for))\}$"
     )
 
-    matches = re.finditer(r"\{[^}]*\}", template)
+    matches = re.finditer(r"\{[^}]*\}", scannable)
 
     for match in matches:
         content = match.group(0)
@@ -327,3 +316,8 @@ def validate_template(template: str) -> tuple[bool, str | None]:
             return False, f"Invalid variable syntax: {content}"
 
     return True, None
+
+
+# resolve_value 는 blocks 모듈 소유지만, 과거 template 모듈에서 재export 되어
+# 왔으므로 import 경로를 유지한다.
+_ = resolve_value

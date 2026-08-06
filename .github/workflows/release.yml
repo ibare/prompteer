@@ -1,0 +1,89 @@
+name: Release
+
+# v* 태그를 밀 때만 배포한다. 그 외 경로로는 PyPI 에 올라가지 않는다.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # 배포 전에 전체 매트릭스 테스트를 다시 돌린다.
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    name: 빌드 및 검증
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: 태그와 패키지 버전 일치 확인
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          INIT_VERSION=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('src/prompteer/__init__.py').read()).group(1))")
+          echo "태그=$TAG pyproject=$VERSION __init__=$INIT_VERSION"
+          if [ "$TAG" != "$VERSION" ] || [ "$TAG" != "$INIT_VERSION" ]; then
+            echo "::error::태그와 패키지 버전이 일치하지 않습니다"
+            exit 1
+          fi
+
+      - name: 빌드
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          python -m build
+
+      - name: 산출물 검증
+        run: twine check dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: PyPI 배포
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Trusted Publishing (OIDC). API 토큰을 보관하지 않는다.
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: PyPI 업로드
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub 릴리스 생성
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: 릴리스 생성
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "CHANGELOG.md 의 $GITHUB_REF_NAME 항목을 참고하세요." \
+            dist/*

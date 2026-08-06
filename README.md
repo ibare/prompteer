@@ -343,6 +343,47 @@ Use conditions inside loops:
 | `{#for item in list}...{/for}` | Loop block |
 | `{#for item, index in list}...{/for}` | Loop with index |
 | `{object.property}` | Dot notation access |
+| `{{literal}}` | Escaped literal braces (renders as `{literal}`) |
+
+## Literal Braces (v0.4.0+)
+
+### Braces inside injected values are safe
+
+Values you pass in are **never** re-scanned for variables. Braces that appear
+inside a value are preserved as-is:
+
+```python
+prompts.docs.guide(body="React {children} usage")
+# Output: React {children} usage
+```
+
+This holds for every rendering path — plain templates, `{#if}` / `{#for}` blocks,
+and dot notation. You do **not** need to escape values before passing them.
+
+### Escaping braces in the template itself
+
+To write a literal brace in the prompt file, double it:
+
+```markdown
+---
+description: Escaping example
+name: User name
+---
+Hello {name}!
+Use {{children}} to render nested content.
+```
+
+```python
+prompts.chat.greeting(name="Alice")
+# Output:
+# Hello Alice!
+# Use {children} to render nested content.
+```
+
+`{{` renders as `{` and `}}` renders as `}`. Because rendering is a single pass,
+an unescaped result is never reinterpreted as a variable.
+
+> **Note:** Block tags cannot be escaped. `{{#if x}}` is still parsed as a block.
 
 ## Dynamic Routing
 
