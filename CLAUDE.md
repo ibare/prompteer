@@ -49,15 +49,17 @@ flake8 src/ tests/
 ```
 
 ### Building and Distribution
+
+Publishing is automated — see "CI/CD" and "Release Process" below. Do **not**
+run `twine upload` manually; the project uses Trusted Publishing and no API
+token exists. Local builds are for inspecting artifacts before tagging.
+
 ```bash
-# Build distribution packages
+# Build distribution packages (inspection only)
 python -m build
 
 # Check distribution
 twine check dist/*
-
-# Upload to PyPI (production)
-twine upload dist/*
 
 # Install locally in editable mode for development
 pip install -e .
@@ -216,6 +218,93 @@ active(bool): Is active
 - **Formatting**: Black with 88 character line length
 - **Imports**: isort with black profile
 
+## CI/CD
+
+Two workflows in `.github/workflows/`. Added in v0.4.0.
+
+### `test.yml`
+
+Runs on push to `main`/`develop`, on every PR, and via `workflow_call` from
+`release.yml`. Matrix: Python 3.9, 3.10, 3.11, 3.12, 3.13.
+
+Each job runs the test suite, doctests for `template.py` and `blocks.py`, and
+executes the example scripts to catch import/runtime breakage.
+
+**Python floor is 3.9.** 3.7 has no verification path (neither uv nor GitHub
+runners provide it) and 3.8 reached EOL in 2024-10. Every module uses
+`from __future__ import annotations`, so annotations are never evaluated at
+runtime — the floor is driven by tooling availability, not syntax.
+
+### `release.yml`
+
+Triggered **only** by pushing a `v*` tag. Nothing else publishes to PyPI.
+
+Pipeline: matrix tests (reuses `test.yml`) → version check → build →
+`twine check` → PyPI upload → GitHub release with artifacts attached.
+
+The version check fails the build unless the tag matches **both**
+`pyproject.toml` and `src/prompteer/__init__.py`. A mismatched release cannot
+go out.
+
+### Trusted Publishing
+
+Uploads use PyPI Trusted Publishing (OIDC). **There is no API token anywhere** —
+not in the repo, not in GitHub secrets, not on a developer machine. The
+`publish` job requests a short-lived OIDC token via `permissions: id-token:
+write` and PyPI verifies it against the registered publisher.
+
+PyPI configuration (project → Manage → Publishing):
+
+| Field | Value |
+|-------|-------|
+| Owner | `ibare` |
+| Repository name | `prompteer` |
+| Workflow name | `release.yml` |
+| Environment | `pypi` |
+
+All four must match exactly, and `Environment` must equal the `environment:`
+value in `release.yml`.
+
+This replaced manual local uploads. The prior process depended on a token whose
+location was later unrecoverable, and the release method itself could not be
+reconstructed from the repository — there was no CI history and no PyPI
+provenance. Do not reintroduce manual uploads.
+
+### Verifying a release
+
+```bash
+# Metadata landed (the /pypi/<pkg>/json endpoint is CDN-cached; the
+# version-specific endpoint updates first)
+curl -s https://pypi.org/pypi/prompteer/0.4.0/json | python -m json.tool
+
+# Trusted Publishing attestation exists — 200 means OIDC-backed,
+# 404 means it was uploaded some other way
+curl -s -o /dev/null -w "%{http_code}\n" \
+  https://pypi.org/integrity/prompteer/0.4.0/prompteer-0.4.0-py3-none-any.whl/provenance
+```
+
+Releases before v0.4.0 return 404 — they predate Trusted Publishing.
+
+### When a release fails
+
+The tag is already pushed, so fix and retag:
+
+```bash
+git tag -d v0.x.x && git push origin :refs/tags/v0.x.x   # remove tag
+# commit the fix, then recreate the tag
+```
+
+A failure before the `publish` job leaves PyPI untouched. If `publish` itself
+fails (usually a Trusted Publisher mismatch), correct the PyPI settings and
+retag — nothing was uploaded. Once a version *is* on PyPI it cannot be replaced;
+yank it and ship a patch version instead.
+
+## Branch Strategy
+
+`develop` → PR → `main` → tag. Work lands on `develop`, PRs target `main`, and
+releases are tagged on `main` after merge. Keep `develop` fast-forwarded to
+`main` after each merge so the next branch starts from the release commit.
+
 ## Release Process
 
 Releases are automated. Pushing a `v*` tag is the only action that publishes to
@@ -226,24 +315,12 @@ PyPI — see `.github/workflows/release.yml`.
 2. Update `CHANGELOG.md` with new version and changes
 3. Run tests locally: `pytest`
 4. Merge to `main` (CI runs the full matrix on the PR)
-5. Tag: `git tag -a v0.x.x -m "Release v0.x.x"`
-6. Push: `git push && git push --tags`
+5. Tag on `main` after the merge: `git tag -a v0.x.x -m "Release v0.x.x"`
+6. Push the tag: `git push origin v0.x.x`
 
-The tag push triggers: matrix tests → version check → build → `twine check` →
-PyPI upload via Trusted Publishing → GitHub release.
-
-**No API token is involved.** Publishing uses PyPI Trusted Publishing (OIDC),
-configured on PyPI under the project's Publishing settings:
-
-| Field | Value |
-|-------|-------|
-| Owner | `ibare` |
-| Repository | `prompteer` |
-| Workflow name | `release.yml` |
-| Environment | `pypi` |
-
-Manual `twine upload` is no longer part of the process. Building locally
-(`python -m build`) is still useful for inspecting artifacts before tagging.
+That last push is what publishes. See "CI/CD" above for the pipeline, the
+Trusted Publisher settings, how to verify the result, and what to do when a
+release fails.
 
 ## Common Development Tasks
 
