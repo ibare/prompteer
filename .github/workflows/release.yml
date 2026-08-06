@@ -79,11 +79,34 @@ jobs:
           name: dist
           path: dist/
 
+      # CHANGELOG 를 릴리스 노트의 단일 출처로 삼는다. 항목이 없으면 실패시켜
+      # 내용 없는 릴리스가 나가지 않게 한다.
+      - name: CHANGELOG 에서 릴리스 노트 추출
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            BEGIN { esc = v; gsub(/\./, "\\.", esc); pat = "^## \\[" esc "\\]" }
+            $0 ~ pat { flag = 1; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+
+          # 앞뒤 빈 줄 정리
+          sed -i -e '/./,$!d' RELEASE_NOTES.md
+
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::CHANGELOG.md 에 [$VERSION] 항목이 없습니다"
+            exit 1
+          fi
+
+          echo "--- 추출된 릴리스 노트 ---"
+          cat RELEASE_NOTES.md
+
       - name: 릴리스 생성
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --notes "CHANGELOG.md 의 $GITHUB_REF_NAME 항목을 참고하세요." \
+            --notes-file RELEASE_NOTES.md \
             dist/*
