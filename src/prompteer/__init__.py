@@ -8,13 +8,15 @@ from __future__ import annotations
 
 from prompteer.core import Prompteer, create_prompts
 from prompteer.exceptions import (
+    AmbiguousPromptError,
+    DynamicParameterError,
     InvalidPathError,
     PrompteerError,
     PromptNotFoundError,
     TemplateVariableError,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "__version__",
@@ -24,4 +26,6 @@ __all__ = [
     "PromptNotFoundError",
     "TemplateVariableError",
     "InvalidPathError",
+    "DynamicParameterError",
+    "AmbiguousPromptError",
 ]

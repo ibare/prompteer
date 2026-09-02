@@ -5,7 +5,7 @@ Core Prompteer class for managing prompts.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from prompteer.exceptions import InvalidPathError
 from prompteer.proxy import PromptProxy
@@ -62,14 +62,15 @@ class Prompteer:
         # Create internal proxy
         self._proxy = PromptProxy(self._base_path, self._base_path, self._encoding)
 
-    def __getattr__(self, name: str) -> PromptProxy | Callable[..., str]:
+    def __getattr__(self, name: str) -> Any:
         """Get prompt by attribute name.
 
         Args:
             name: Attribute name in camelCase
 
         Returns:
-            PromptProxy for directories, or callable for files
+            PromptProxy for directories, a callable for files, or a
+            DeferredPromptProxy for prompts behind a dynamic route
 
         Raises:
             PromptNotFoundError: If the prompt doesn't exist

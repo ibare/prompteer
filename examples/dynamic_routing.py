@@ -6,7 +6,7 @@ Demonstrates Next.js-style dynamic prompt selection.
 
 from pathlib import Path
 
-from prompteer import create_prompts, PromptNotFoundError
+from prompteer import DynamicParameterError, PromptNotFoundError, create_prompts
 
 # Get prompts directory relative to this file (not CWD)
 PROMPTS_DIR = Path(__file__).parent / "prompts-dynamic"
@@ -50,8 +50,44 @@ def main():
     system_msg = prompts.chat.system(type="friendly")
     print(f"System: {system_msg}")
 
-    # Example 5: Error handling
-    print("\n5. Error handling:")
+    # Example 5: Nested [param] directories
+    print("\n5. Nested dynamic routing (tier -> language):")
+    print("-" * 60)
+    result = prompts.support.reply(
+        tier="pro", lang="ko", customer="김민태", issue="결제 오류"
+    )
+    print(result)
+
+    # Example 6: A static directory between two dynamic levels
+    print("\n6. Static directory inside a dynamic route:")
+    print("-" * 60)
+    result = prompts.support.escalation.manager(
+        tier="pro", customer="김민태", summary="3회 재발한 결제 오류"
+    )
+    print(result)
+
+    # Example 7: default/ subtree covers a whole path, not just one file
+    print("\n7. Fallback through the default/ subtree:")
+    print("-" * 60)
+    result = prompts.support.escalation.manager(
+        tier="unknown", customer="이서준", summary="등급 미확인 고객 문의"
+    )
+    print(result)
+
+    # Example 8: The routing value itself is available in the prompt body
+    print("\n8. Routing value used inside the prompt:")
+    print("-" * 60)
+    result = prompts.support.reply(tier="starter", customer="박도윤", issue="배송 지연")
+    print(result)
+
+    # Example 9: Names match regardless of case
+    print("\n9. Case-insensitive routing values:")
+    print("-" * 60)
+    result = prompts.question.user(type="BASIC", name="Dana")
+    print(result)
+
+    # Example 10: Error handling
+    print("\n10. Error handling:")
     print("-" * 60)
     try:
         # This will fail because type parameter is required
@@ -62,6 +98,21 @@ def main():
     try:
         # This will fail if no default.md exists
         result = prompts.nonexistent.prompt(type="any")
+    except PromptNotFoundError as e:
+        print(f"✓ Caught expected error: {e}")
+
+    try:
+        # An empty routing value is rejected instead of resolving ambiguously
+        result = prompts.question.user(type="", name="Erin")
+    except DynamicParameterError as e:
+        print(f"✓ Caught expected error: {e}")
+
+    try:
+        # default.md cannot stand in for a multi-segment path
+        result = prompts.support.escalation.manager(
+            tier="free", customer="한지우", summary="문의"
+        )
+        print(f"free tier escalation resolved: {result.splitlines()[0]}")
     except PromptNotFoundError as e:
         print(f"✓ Caught expected error: {e}")
 

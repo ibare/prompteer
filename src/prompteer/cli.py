@@ -49,7 +49,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     init_parser.add_argument(
-        "-f", "--force",
+        "-f",
+        "--force",
         action="store_true",
         help="Overwrite existing directory",
     )
@@ -67,13 +68,15 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     generate_parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         default="prompts.pyi",
         help="Output file path for type stubs (default: prompts.pyi)",
     )
 
     generate_parser.add_argument(
-        "-w", "--watch",
+        "-w",
+        "--watch",
         action="store_true",
         help="Watch for file changes and regenerate types automatically",
     )
@@ -96,8 +99,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for error)
     """
-    from pathlib import Path
     import shutil
+    from pathlib import Path
 
     prompts_dir = Path(args.prompts_dir)
 
@@ -119,8 +122,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     chat_dir = prompts_dir / "chat"
     chat_dir.mkdir(parents=True)
 
-    (chat_dir / "system.md").write_text(
-        """---
+    (chat_dir / "system.md").write_text("""---
 description: System message for chat
 role: AI role description
 personality: AI personality traits
@@ -129,11 +131,9 @@ You are a {role}.
 
 Your personality is {personality}.
 
-Please be helpful, accurate, and respectful in all interactions."""
-    )
+Please be helpful, accurate, and respectful in all interactions.""")
 
-    (chat_dir / "user-query.md").write_text(
-        """---
+    (chat_dir / "user-query.md").write_text("""---
 description: User query message
 question: User's question
 context: Additional context
@@ -142,26 +142,22 @@ Question: {question}
 
 Context: {context}
 
-Please provide a detailed and helpful answer."""
-    )
+Please provide a detailed and helpful answer.""")
 
     # Dynamic routing example - question/[type]
     question_basic_dir = prompts_dir / "question" / "[type]" / "basic"
     question_basic_dir.mkdir(parents=True)
 
-    (question_basic_dir / "user.md").write_text(
-        """---
+    (question_basic_dir / "user.md").write_text("""---
 description: Basic user query
 name: User name
 ---
-Hello {name}, this is a basic question. How can I help you today?"""
-    )
+Hello {name}, this is a basic question. How can I help you today?""")
 
     question_advanced_dir = prompts_dir / "question" / "[type]" / "advanced"
     question_advanced_dir.mkdir(parents=True)
 
-    (question_advanced_dir / "user.md").write_text(
-        """---
+    (question_advanced_dir / "user.md").write_text("""---
 description: Advanced user query
 name: User name
 context: Additional context
@@ -170,8 +166,7 @@ Hello {name}, this is an advanced question.
 
 Context: {context}
 
-I'm here to provide detailed technical assistance. What would you like to know?"""
-    )
+I'm here to provide detailed technical assistance. What would you like to know?""")
 
     # Default fallback
     (prompts_dir / "question" / "[type]" / "default.md").write_text(
@@ -185,31 +180,25 @@ This is the default prompt. It's used when the requested type doesn't have a spe
     chat_friendly_dir = prompts_dir / "chat-dynamic" / "[type]" / "friendly"
     chat_friendly_dir.mkdir(parents=True)
 
-    (chat_friendly_dir / "user.md").write_text(
-        """---
+    (chat_friendly_dir / "user.md").write_text("""---
 description: Friendly chat user message
 message: User message
 ---
-{message} 😊"""
-    )
+{message} 😊""")
 
-    (chat_friendly_dir / "system.md").write_text(
-        """---
+    (chat_friendly_dir / "system.md").write_text("""---
 description: Friendly chat system message
 ---
-You are a friendly and approachable AI assistant. Be warm, casual, and helpful!"""
-    )
+You are a friendly and approachable AI assistant. Be warm, casual, and helpful!""")
 
     chat_professional_dir = prompts_dir / "chat-dynamic" / "[type]" / "professional"
     chat_professional_dir.mkdir(parents=True)
 
-    (chat_professional_dir / "user.md").write_text(
-        """---
+    (chat_professional_dir / "user.md").write_text("""---
 description: Professional chat user message
 message: User message
 ---
-{message}"""
-    )
+{message}""")
 
     (chat_professional_dir / "system.md").write_text(
         """---
@@ -217,6 +206,63 @@ description: Professional chat system message
 ---
 You are a professional AI assistant. Be formal, precise, and maintain a business-appropriate tone."""
     )
+
+    # Nested dynamic routing - support/[tier]/<tier>/[lang]/<lang>/reply.md
+    # Shows three things at once: two dynamic levels, a static directory
+    # between them, and a default/ subtree used when no value matches.
+    support_dir = prompts_dir / "support" / "[tier]"
+
+    (support_dir / "pro" / "[lang]" / "ko").mkdir(parents=True)
+    (support_dir / "pro" / "[lang]" / "ko" / "reply.md").write_text("""---
+description: Pro tier reply in Korean
+customer: Customer name
+issue: Reported issue
+---
+안녕하세요 {customer}님, 프로 등급 전담 상담사입니다.
+
+문의하신 내용: {issue}""")
+
+    (support_dir / "pro" / "[lang]" / "en").mkdir(parents=True)
+    (support_dir / "pro" / "[lang]" / "en" / "reply.md").write_text("""---
+description: Pro tier reply in English
+customer: Customer name
+issue: Reported issue
+---
+Hello {customer}, you are speaking with a dedicated Pro support agent.
+
+Your issue: {issue}""")
+
+    (support_dir / "pro" / "escalation").mkdir(parents=True)
+    (support_dir / "pro" / "escalation" / "manager.md").write_text("""---
+description: Pro tier manager escalation
+customer: Customer name
+summary: Situation summary
+---
+[PRO] {customer}
+
+{summary}""")
+
+    # default/ is a whole fallback subtree, so it can cover escalation/manager
+    # as well; a single default.md could not.
+    (support_dir / "default" / "escalation").mkdir(parents=True)
+    (support_dir / "default" / "reply.md").write_text("""---
+description: Reply used when the tier is unknown
+customer: Customer name
+issue: Reported issue
+---
+안녕하세요 {customer}님, 문의 주셔서 감사합니다.
+
+문의하신 내용: {issue}
+
+'{tier}' 등급은 전담 창구가 없어 일반 절차로 답변드립니다.""")
+    (support_dir / "default" / "escalation" / "manager.md").write_text("""---
+description: Escalation used when the tier is unknown
+customer: Customer name
+summary: Situation summary
+---
+[ESCALATION] {customer}
+
+{summary}""")
 
     print(f"[prompteer] ✓ Created directory structure")
     print(f"[prompteer] ")
@@ -232,17 +278,29 @@ You are a professional AI assistant. Be formal, precise, and maintain a business
     print(f"[prompteer]   │       ├── advanced/")
     print(f"[prompteer]   │       │   └── user.md")
     print(f"[prompteer]   │       └── default.md")
-    print(f"[prompteer]   └── chat-dynamic/")
-    print(f"[prompteer]       └── [type]/")
-    print(f"[prompteer]           ├── friendly/")
-    print(f"[prompteer]           │   ├── user.md")
-    print(f"[prompteer]           │   └── system.md")
-    print(f"[prompteer]           └── professional/")
-    print(f"[prompteer]               ├── user.md")
-    print(f"[prompteer]               └── system.md")
+    print(f"[prompteer]   ├── chat-dynamic/")
+    print(f"[prompteer]   │   └── [type]/")
+    print(f"[prompteer]   │       ├── friendly/")
+    print(f"[prompteer]   │       │   ├── user.md")
+    print(f"[prompteer]   │       │   └── system.md")
+    print(f"[prompteer]   │       └── professional/")
+    print(f"[prompteer]   │           ├── user.md")
+    print(f"[prompteer]   │           └── system.md")
+    print(f"[prompteer]   └── support/")
+    print(f"[prompteer]       └── [tier]/")
+    print(f"[prompteer]           ├── pro/")
+    print(f"[prompteer]           │   ├── [lang]/")
+    print(f"[prompteer]           │   │   ├── ko/reply.md")
+    print(f"[prompteer]           │   │   └── en/reply.md")
+    print(f"[prompteer]           │   └── escalation/manager.md")
+    print(f"[prompteer]           └── default/")
+    print(f"[prompteer]               ├── reply.md")
+    print(f"[prompteer]               └── escalation/manager.md")
     print(f"[prompteer] ")
     print(f"[prompteer] Next steps:")
-    print(f"[prompteer]   1. Try: python -c \"from prompteer import create_prompts; p = create_prompts('{prompts_dir}'); print(p.chat.system(role='assistant', personality='helpful'))\"")
+    print(
+        f"[prompteer]   1. Try: python -c \"from prompteer import create_prompts; p = create_prompts('{prompts_dir}'); print(p.chat.system(role='assistant', personality='helpful'))\""
+    )
     print(f"[prompteer]   2. Generate types: prompteer generate-types {prompts_dir}")
     print(f"[prompteer]   3. Edit prompts in {prompts_dir}/ to fit your needs")
 
@@ -396,9 +454,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         argv = sys.argv[1:]
 
     # Check if first argument is a directory (not a subcommand)
-    if argv and not argv[0].startswith('-') and argv[0] not in ['init', 'generate-types']:
+    if (
+        argv
+        and not argv[0].startswith("-")
+        and argv[0] not in ["init", "generate-types"]
+    ):
         # Insert 'generate-types' as the command
-        argv = ['generate-types'] + argv
+        argv = ["generate-types"] + argv
 
     args = parser.parse_args(argv)
 

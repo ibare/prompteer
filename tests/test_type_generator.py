@@ -114,3 +114,113 @@ class TestTypeStubGenerator:
         if "def withMetadata" in content:
             # Check for type annotations
             assert "int" in content or "float" in content
+
+
+class TestNestedDynamicStubs:
+    """Stub generation for recursive dynamic routes."""
+
+    @staticmethod
+    def _write(root, relative: str, content: str) -> None:
+        """Create a prompt file, making parent directories as needed."""
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    def _generate(self, tmp_path, tree: dict) -> str:
+        """Build a prompt tree and return the generated stub content."""
+        prompts_dir = tmp_path / "prompts"
+        for relative, content in tree.items():
+            self._write(prompts_dir, relative, content)
+
+        generator = TypeStubGenerator(prompts_dir)
+        output = tmp_path / "prompts.pyi"
+        generator.generate_type_stub(output)
+        return output.read_text()
+
+    def test_nested_params_appear_in_one_signature(self, tmp_path) -> None:
+        """Both routing parameters are required by the generated method."""
+        content = self._generate(
+            tmp_path,
+            {
+                "q/[type]/basic/[lang]/ko/user.md": "ko",
+                "q/[type]/basic/[lang]/en/user.md": "en",
+            },
+        )
+
+        assert 'type: Literal["basic"]' in content
+        assert 'lang: Literal["en", "ko"]' in content
+
+    def test_intermediate_static_dir_becomes_a_proxy(self, tmp_path) -> None:
+        """Static directories under value directories merge into one class."""
+        content = self._generate(
+            tmp_path,
+            {
+                "q/[type]/basic/extra/user.md": "basic extra",
+                "q/[type]/advanced/extra/user.md": "advanced extra",
+            },
+        )
+
+        assert "class _QExtraProxy:" in content
+        assert "def extra(self) -> _QExtraProxy: ..." in content
+        assert 'type: Literal["advanced", "basic"]' in content
+
+    def test_branches_needing_different_params_become_overloads(self, tmp_path) -> None:
+        """A prompt reachable with and without an inner parameter overloads."""
+        content = self._generate(
+            tmp_path,
+            {
+                "q/[type]/basic/[lang]/ko/user.md": "ko",
+                "q/[type]/advanced/user.md": "advanced",
+            },
+        )
+
+        assert "from typing import overload" in content
+        assert content.count("@overload") == 2
+        assert 'type: Literal["advanced"]' in content
+        assert 'type: Literal["basic"]' in content
+
+    def test_default_directory_adds_no_literal_value(self, tmp_path) -> None:
+        """The fallback subtree is not a selectable routing value."""
+        content = self._generate(
+            tmp_path,
+            {
+                "q/[type]/basic/user.md": "basic",
+                "q/[type]/default/user.md": "fallback",
+            },
+        )
+
+        assert 'type: Literal["basic"]' in content
+        assert '"default"' not in content
+
+    def test_attribute_names_are_lowercase(self, tmp_path) -> None:
+        """A capitalised tree still yields conventional camelCase attributes."""
+        content = self._generate(tmp_path, {"Chat/System.md": "x"})
+
+        assert "def chat(self) -> _ChatProxy: ..." in content
+        assert "def system(" in content
+
+    def test_case_collision_is_warned(self, tmp_path) -> None:
+        """Unportable trees are reported instead of silently generated.
+
+        The colliding entries are passed directly because a case-insensitive
+        filesystem cannot hold both of them.
+        """
+        generator = TypeStubGenerator(tmp_path)
+        generator._warn_on_case_collisions(
+            tmp_path, [tmp_path / "Chat", tmp_path / "chat", tmp_path / "other"]
+        )
+
+        assert len(generator.warnings) == 1
+        assert "differ only by case" in generator.warnings[0]
+        assert "'Chat', 'chat'" in generator.warnings[0]
+
+    def test_directory_and_file_name_clash_is_warned(self, tmp_path) -> None:
+        """A directory and a prompt file sharing a name is reported."""
+        prompts_dir = tmp_path / "prompts"
+        self._write(prompts_dir, "chat/system.md", "x")
+        self._write(prompts_dir, "chat.md", "x")
+
+        generator = TypeStubGenerator(prompts_dir)
+        generator.generate_type_stub(tmp_path / "prompts.pyi")
+
+        assert any("share this name" in warning for warning in generator.warnings)

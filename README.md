@@ -385,6 +385,46 @@ an unescaped result is never reinterpreted as a variable.
 
 > **Note:** Block tags cannot be escaped. `{{#if x}}` is still parsed as a block.
 
+## Name Matching
+
+Names are matched by prompteer, not by the filesystem, so the same prompt tree
+resolves identically on macOS, Linux and Windows.
+
+```
+prompts/
+└── Code-Review/
+    └── Review-Request.md
+```
+
+```python
+prompts.codeReview.reviewRequest()   # works
+prompts.CodeReview.ReviewRequest()   # works too
+```
+
+Matching ignores **case** and **unicode normal form** (NFC vs NFD). This closes
+a class of bug where a tree resolves on a developer's macOS machine — whose
+filesystem is case-insensitive and may store names in NFD — and fails on a
+case-sensitive Linux server. The same rules apply to dynamic routing values, so
+`type="BASIC"` finds the `basic/` directory.
+
+Two entries in one directory that differ *only* by case or normal form cannot
+be resolved portably, so prompteer refuses to guess and raises
+`AmbiguousPromptError` naming both. An exact spelling still resolves:
+
+```
+prompts/chat/     # on a case-sensitive filesystem
+prompts/Chat/
+```
+
+```python
+prompts.chat      # exact match wins
+prompts.Chat      # exact match wins
+prompts.CHAT      # AmbiguousPromptError: 'Chat', 'chat' differ only by case
+```
+
+kebab-case remains the recommended convention on disk; it is simply no longer
+load-bearing.
+
 ## Dynamic Routing
 
 Create flexible prompts that adapt based on runtime parameters, similar to Next.js dynamic routes.
@@ -421,8 +461,126 @@ fallback = prompts.question.user(type="expert")  # Uses default.md
 
 1. `[type]` directory = dynamic parameter
 2. `basic/`, `advanced/` = possible values for the parameter
-3. `default.md` = fallback when value doesn't match any directory
-4. If no default.md exists, raises `PromptNotFoundError`
+3. `default/` = fallback **subtree** when the value matches no directory
+4. `default.md` = fallback **file**, used only when a single name is being
+   resolved (see [Fallback Order](#fallback-order))
+5. If nothing matches, raises `PromptNotFoundError` listing every path tried
+
+### Nested Parameters (v0.5.0+)
+
+`[param]` directories may nest. Each level consumes its own argument.
+
+```
+prompts/
+└── support/
+    └── [tier]/
+        └── pro/
+            └── [lang]/
+                ├── ko/reply.md
+                └── en/reply.md
+```
+
+```python
+prompts.support.reply(tier="pro", lang="ko", customer="Alice", issue="Billing")
+```
+
+A parameter that a route needs is required: omitting `lang` raises `TypeError`.
+
+### Static Directories Inside a Route (v0.5.0+)
+
+Static directories may sit between a parameter and the prompt, and are merged
+across value directories.
+
+```
+prompts/
+└── support/
+    └── [tier]/
+        ├── pro/
+        │   └── escalation/manager.md
+        └── free/
+            └── escalation/manager.md
+```
+
+```python
+prompts.support.escalation.manager(tier="pro", customer="Alice", summary="...")
+```
+
+The path is resolved when the prompt is called, because the routing arguments
+are only known then.
+
+### Fallback Order
+
+At each `[param]` level, resolution tries in order:
+
+1. `<value>/` — the subtree for the supplied value
+2. `default/` — the fallback subtree
+3. `default.md` — **only when one name remains** to resolve
+
+Step 3 is restricted because a single file cannot stand in for a whole path:
+`escalation/manager` and `escalation/report` are different prompts, so
+returning the same `default.md` for both would silently deliver the wrong
+prompt. Use a `default/` subtree to cover those.
+
+A failure at one level is final — it is **not** propagated to an outer
+`[param]` level. If `lang="fr"` matches nothing, you get an error naming `fr`
+rather than the outer tier's default:
+
+```
+PromptNotFoundError: No prompt found for reply with lang='fr'
+  tried: support/[tier]/pro/[lang]/fr/reply.md  (no lang='fr' directory)
+  tried: support/[tier]/pro/[lang]/default/reply.md  (no default/ directory)
+  tried: support/[tier]/pro/[lang]/default.md
+```
+
+Put a `default/` or `default.md` at each level where you want a fallback.
+
+### Routing Values in the Prompt Body (v0.5.0+)
+
+The values used for routing are also available as template variables, so a
+prompt can mention the route it was selected by:
+
+```markdown
+---
+description: Pro tier reply
+customer: Customer name
+---
+안녕하세요 {customer}님. ({tier} 등급 / {lang})
+```
+
+```python
+prompts.support.reply(tier="pro", lang="ko", customer="Alice")
+# → 안녕하세요 Alice님. (pro 등급 / ko)
+```
+
+Every consumed level is available, including in `default.md` and the
+`default/` subtree — useful for saying which value failed to match:
+
+```markdown
+{tier} 등급은 아직 지원하지 않습니다.
+```
+
+The value substituted is **the one you passed**, not the directory it matched.
+Since matching ignores case, `tier="PRO"` selects `pro/` but renders `PRO`.
+
+These names cannot collide with your own variables: routing consumes the name
+before rendering, and Python forbids passing the same keyword twice. A
+parameter name is effectively reserved by the route at that level.
+
+### Parameter Values
+
+A routing value selects exactly one directory, so it must be a non-blank
+`str`, `int`, `bool` or `Enum` with no path separators. Anything else raises
+`DynamicParameterError`:
+
+```python
+prompts.question.user(type="")          # DynamicParameterError: empty or blank
+prompts.question.user(type=None)        # DynamicParameterError: cannot be None
+prompts.question.user(type="../other")  # DynamicParameterError: path separators
+prompts.question.user(name="Alice")     # TypeError: Missing required parameter: type
+```
+
+An absent argument keeps raising `TypeError`, following the usual Python
+convention for a missing argument.
 
 ### Mixed Static and Dynamic Files
 
@@ -457,10 +615,21 @@ bad_system = prompts.myQuery.system(type="bad")
 ```
 
 **Priority Order:**
-1. Static directories and files are checked first
-2. Dynamic directories are used as fallback
+1. If you pass the level's routing parameter, the dynamic route is tried first
+2. Otherwise the static directory or file wins
+3. If the dynamic route finds nothing, the static match is used as a fallback
 
-This allows you to have shared/common prompts alongside type-specific ones.
+The result depends only on the arguments you pass, never on filesystem
+traversal order. This lets shared prompts live alongside type-specific ones,
+and lets the same name mean "generic" or "routed" depending on the call:
+
+```python
+prompts.myQuery.common()                # static common.md
+prompts.support.reply(tier="pro")       # routed [tier]/pro/reply.md
+```
+
+Passing a routing parameter that no route consumes is an error rather than a
+silent no-op, so a typo in the value cannot quietly hand back a generic prompt.
 
 ### Type Hints with Dynamic Routing
 
@@ -477,6 +646,19 @@ def user(
     type: Literal["basic", "advanced"],  # Autocomplete with available values!
     name: str = "",
     **kwargs: Any
+) -> str: ...
+```
+
+Nested routes contribute their own parameter. When branches of the tree need
+different parameters, the stub emits one `@overload` per shape rather than
+pretending every parameter is always required:
+
+```python
+@overload
+def reply(self, tier: Literal["free"], **kwargs: Any) -> str: ...
+@overload
+def reply(
+    self, tier: Literal["pro"], lang: Literal["en", "ko"], **kwargs: Any
 ) -> str: ...
 ```
 
@@ -732,7 +914,9 @@ prompts/
     └── review.md       → prompts.codeReview.review()
 ```
 
-**Key Convention**: `kebab-case` files/directories → `camelCase` Python methods
+**Key Convention**: `kebab-case` files/directories → `camelCase` Python methods.
+Matching ignores case and unicode normal form, so the convention is a style
+choice rather than a requirement (see [Name Matching](#name-matching)).
 
 ### Dynamic Routing (v0.2.0+)
 
@@ -760,6 +944,24 @@ advanced = prompts.question.user(type="advanced", name="Bob", context="expert")
 fallback = prompts.question.user(type="expert")  # Uses default.md
 ```
 
+**Nested parameters and static directories (v0.5.0+):**
+```
+prompts/
+└── support/
+    └── [tier]/
+        ├── pro/
+        │   ├── [lang]/ko/reply.md      # tier="pro", lang="ko"
+        │   └── escalation/manager.md   # static dir inside a route
+        └── default/                    # fallback subtree
+            ├── reply.md
+            └── escalation/manager.md
+```
+
+```python
+prompts.support.reply(tier="pro", lang="ko", customer="Alice", issue="Billing")
+prompts.support.escalation.manager(tier="pro", customer="Alice", summary="...")
+```
+
 **Type safety with Literal types:**
 ```python
 # Generated type stub includes available values
@@ -781,7 +983,8 @@ prompteer generate-types ./prompts -o prompts.pyi
 ### Key Implementation Files
 
 - `src/prompteer/core.py` - Main `Prompteer` class and `create_prompts()` function
-- `src/prompteer/proxy.py` - Dynamic attribute access via `__getattr__`
+- `src/prompteer/proxy.py` - Dynamic attribute access and route resolution
+- `src/prompteer/path_utils.py` - Name matching and routing value validation
 - `src/prompteer/template.py` - Variable substitution engine
 - `src/prompteer/metadata.py` - YAML frontmatter parsing
 - `src/prompteer/type_generator.py` - Type stub generation

@@ -33,7 +33,7 @@ jobs:
         run: pytest
 
       - name: doctest 실행
-        run: pytest --no-cov --doctest-modules src/prompteer/template.py src/prompteer/blocks.py
+        run: pytest --no-cov --doctest-modules src/prompteer/template.py src/prompteer/blocks.py src/prompteer/path_utils.py
 
       - name: 예시 실행 확인
         run: |
