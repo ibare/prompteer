@@ -18,7 +18,7 @@ Resolution rules
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 from prompteer.exceptions import (
     DynamicParameterError,
@@ -65,6 +65,47 @@ def _name_candidates(name: str) -> list[str]:
     return [kebab, name]
 
 
+def _lookup(
+    directory: Path,
+    name: str,
+    kind: Literal["dir", "file"],
+    suffix: str = "",
+) -> Path | None:
+    """Find a child entry for an attribute name.
+
+    Two spellings are tried: the kebab-case conversion (the documented
+    convention) and the attribute name verbatim. Ordering is by match quality,
+    not by candidate: every spelling gets an exact pass before any of them may
+    match by normalization. Otherwise ``camel_to_kebab("Chat") == "chat"``
+    would let the derived spelling claim ``chat/`` on a case-sensitive
+    filesystem even though the caller wrote ``Chat`` and ``Chat/`` exists.
+    Within the exact pass the verbatim spelling wins, since that is the name
+    the caller actually typed.
+
+    Args:
+        directory: Parent directory
+        name: Attribute name
+        kind: Restrict the match to directories or files
+        suffix: Appended to each candidate, e.g. ``".md"``
+
+    Returns:
+        Matching path, or None
+    """
+    candidates = _name_candidates(name)
+
+    for candidate in reversed(candidates):
+        hit = find_entry(directory, f"{candidate}{suffix}", kind, exact_only=True)
+        if hit is not None:
+            return hit
+
+    for candidate in candidates:
+        hit = find_entry(directory, f"{candidate}{suffix}", kind)
+        if hit is not None:
+            return hit
+
+    return None
+
+
 def _find_dir(directory: Path, name: str) -> Path | None:
     """Find a subdirectory matching an attribute name.
 
@@ -75,11 +116,7 @@ def _find_dir(directory: Path, name: str) -> Path | None:
     Returns:
         Matching directory, or None
     """
-    for candidate in _name_candidates(name):
-        hit = find_entry(directory, candidate, "dir")
-        if hit is not None:
-            return hit
-    return None
+    return _lookup(directory, name, "dir")
 
 
 def _find_md(directory: Path, name: str) -> Path | None:
@@ -92,11 +129,7 @@ def _find_md(directory: Path, name: str) -> Path | None:
     Returns:
         Matching file, or None
     """
-    for candidate in _name_candidates(name):
-        hit = find_entry(directory, f"{candidate}.md", "file")
-        if hit is not None:
-            return hit
-    return None
+    return _lookup(directory, name, "file", ".md")
 
 
 # ---------------------------------------------------------------------------

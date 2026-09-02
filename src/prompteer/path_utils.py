@@ -291,6 +291,7 @@ def find_entry(
     directory: Path,
     name: str,
     kind: Literal["dir", "file", "any"] = "any",
+    exact_only: bool = False,
 ) -> Path | None:
     """Find a child entry by name, ignoring case and unicode normal form.
 
@@ -301,6 +302,10 @@ def find_entry(
         directory: Parent directory to search
         name: Name to look for
         kind: Restrict the match to directories, files, or either
+        exact_only: Only accept an entry spelled exactly like ``name``. Callers
+            that try several spellings use this to run an exact pass across all
+            of them before falling back to normalized matching, so a derived
+            spelling cannot beat the name the caller actually wrote.
 
     Returns:
         Path to the matching entry, or None if there is no match
@@ -324,6 +329,9 @@ def find_entry(
     for path in matches:
         if path.name == name:
             return path
+
+    if exact_only:
+        return None
 
     if len(matches) > 1:
         raise AmbiguousPromptError(

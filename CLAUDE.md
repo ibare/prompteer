@@ -277,6 +277,22 @@ active(bool): Is active
   case-sensitive filesystem to construct the collision and skip on macOS; the
   same behaviour is covered on any platform by the stubbed-listing unit tests
   in `test_path_utils.py`
+
+  To actually run them on macOS, mount a case-sensitive volume and point
+  pytest's `tmp_path` at it. CI runs on Linux and will catch these regardless,
+  but this closes the loop locally:
+
+  ```bash
+  hdiutil create -size 60m -fs "Case-sensitive APFS" -volname CSTest \
+      -type SPARSE /tmp/cs.sparseimage
+  hdiutil attach /tmp/cs.sparseimage -mountpoint /tmp/csmount -nobrowse
+  pytest --basetemp=/tmp/csmount/pytest    # 2 skips become 2 passes
+  hdiutil detach /tmp/csmount
+  ```
+
+  This is not optional diligence: the v0.5.0 candidate passed on macOS and
+  failed every Linux job because `camel_to_kebab("Chat") == "chat"` let the
+  derived spelling claim `chat/` while `Chat/` existed.
 - `tests/conftest.py` clears the directory listing cache between tests
 - **Coverage target**: Currently ~78%, with focus on core functionality
 - Test files use `tmp_path` fixture for filesystem operations
