@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from prompteer import create_prompts
-from prompteer.exceptions import PromptNotFoundError
+from prompteer.exceptions import DynamicParameterError, PromptNotFoundError
 
 
 @pytest.fixture
@@ -22,33 +22,27 @@ def dynamic_prompts_dir(tmp_path: Path) -> Path:
     # Create question/[type]/basic/user.md
     basic_dir = prompts_dir / "question" / "[type]" / "basic"
     basic_dir.mkdir(parents=True)
-    (basic_dir / "user.md").write_text(
-        """---
+    (basic_dir / "user.md").write_text("""---
 description: Basic user query
 name: User name
 ---
-Hello {name}, this is a basic question."""
-    )
+Hello {name}, this is a basic question.""")
 
     # Create question/[type]/advanced/user.md
     advanced_dir = prompts_dir / "question" / "[type]" / "advanced"
     advanced_dir.mkdir(parents=True)
-    (advanced_dir / "user.md").write_text(
-        """---
+    (advanced_dir / "user.md").write_text("""---
 description: Advanced user query
 name: User name
 context: Additional context
 ---
-Hello {name}, this is an advanced question. Context: {context}"""
-    )
+Hello {name}, this is an advanced question. Context: {context}""")
 
     # Create question/[type]/default.md
-    (prompts_dir / "question" / "[type]" / "default.md").write_text(
-        """---
+    (prompts_dir / "question" / "[type]" / "default.md").write_text("""---
 description: Default fallback
 ---
-This is the default prompt."""
-    )
+This is the default prompt.""")
 
     return prompts_dir
 
@@ -61,13 +55,11 @@ def dynamic_prompts_no_default(tmp_path: Path) -> Path:
     # Create question/[type]/basic/user.md
     basic_dir = prompts_dir / "question" / "[type]" / "basic"
     basic_dir.mkdir(parents=True)
-    (basic_dir / "user.md").write_text(
-        """---
+    (basic_dir / "user.md").write_text("""---
 description: Basic user query
 name: User name
 ---
-Hello {name}, this is a basic question."""
-    )
+Hello {name}, this is a basic question.""")
 
     return prompts_dir
 
@@ -115,9 +107,7 @@ class TestDynamicRouting:
         with pytest.raises(PromptNotFoundError):
             prompts.question.user(type="expert")
 
-    def test_dynamic_with_template_defaults(
-        self, dynamic_prompts_dir: Path
-    ) -> None:
+    def test_dynamic_with_template_defaults(self, dynamic_prompts_dir: Path) -> None:
         """Test dynamic routing with default template values."""
         prompts = create_prompts(str(dynamic_prompts_dir))
 
@@ -286,9 +276,7 @@ class TestDynamicRoutingEdgeCases:
         result = prompts.question.default(type="anything")
         assert "Default only" in result
 
-    def test_dynamic_directory_with_subdirectories(
-        self, tmp_path: Path
-    ) -> None:
+    def test_dynamic_directory_with_subdirectories(self, tmp_path: Path) -> None:
         """Test that only .md files are treated as prompts."""
         prompts_dir = tmp_path / "prompts"
 
@@ -325,6 +313,92 @@ class TestDynamicRoutingEdgeCases:
 
         result2 = prompts.question.user(type="advanced_level")
         assert "Advanced level" in result2
+
+
+class TestDynamicParameterValidation:
+    """Validation of the value passed for a [param] directory."""
+
+    def test_empty_string_is_rejected(self, dynamic_prompts_dir: Path) -> None:
+        """An empty value used to resolve to the [param] directory itself."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="cannot be empty or blank"):
+            prompts.question.user(type="")
+
+    def test_blank_string_is_rejected(self, dynamic_prompts_dir: Path) -> None:
+        """Whitespace is not a directory name either."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="cannot be empty or blank"):
+            prompts.question.user(type="   ")
+
+    def test_none_is_rejected(self, dynamic_prompts_dir: Path) -> None:
+        """Explicitly passing None is a value error, not a missing argument."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="cannot be None"):
+            prompts.question.user(type=None)
+
+    def test_surrounding_whitespace_is_rejected(
+        self, dynamic_prompts_dir: Path
+    ) -> None:
+        """A padded value would silently miss its directory."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="whitespace"):
+            prompts.question.user(type=" basic ")
+
+    def test_path_separator_is_rejected(self, dynamic_prompts_dir: Path) -> None:
+        """A value selects one directory, so separators cannot appear in it."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="path separators"):
+            prompts.question.user(type="../../etc")
+
+    def test_parent_reference_is_rejected(self, dynamic_prompts_dir: Path) -> None:
+        """Relative path references cannot escape the prompt tree."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="relative path references"):
+            prompts.question.user(type="..")
+
+    def test_unsupported_type_is_rejected(self, dynamic_prompts_dir: Path) -> None:
+        """Arbitrary objects would stringify into nonsense directory names."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(DynamicParameterError, match="must be a str, int"):
+            prompts.question.user(type=["basic"])
+
+    def test_integer_value_is_accepted(self, tmp_path: Path) -> None:
+        """Numeric values are a natural fit for versioned routes."""
+        prompts_dir = tmp_path / "prompts"
+        version_dir = prompts_dir / "api" / "[version]" / "1"
+        version_dir.mkdir(parents=True)
+        (version_dir / "endpoint.md").write_text("v1 endpoint")
+
+        prompts = create_prompts(str(prompts_dir))
+
+        assert prompts.api.endpoint(version=1) == "v1 endpoint"
+
+    def test_enum_value_is_accepted(self, dynamic_prompts_dir: Path) -> None:
+        """An Enum routes by its value, which keeps call sites type-safe."""
+        from enum import Enum
+
+        class Level(Enum):
+            BASIC = "basic"
+
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        assert "basic" in prompts.question.user(type=Level.BASIC, name="Alice").lower()
+
+    def test_missing_argument_still_raises_type_error(
+        self, dynamic_prompts_dir: Path
+    ) -> None:
+        """An absent argument keeps the usual Python convention."""
+        prompts = create_prompts(str(dynamic_prompts_dir))
+
+        with pytest.raises(TypeError, match="Missing required parameter: type"):
+            prompts.question.user(name="Charlie")
 
 
 class TestDynamicRoutingTypeGeneration:

@@ -114,12 +114,18 @@ python examples/dynamic_routing.py
 
 **`src/prompteer/proxy.py`** - Dynamic attribute resolution
 - `PromptProxy` class: Enables dot-notation traversal of prompt directories
-- `__getattr__()`: Maps camelCase attributes to kebab-case filesystem paths
+- `__getattr__()`: Maps camelCase attributes to filesystem paths
 - Directories → returns new `PromptProxy` for chaining
 - Files (`.md`) → returns callable that renders the prompt
-- Dynamic routing: Detects `[param]` directories and creates special callables
-- `_create_dynamic_callable()`: Handles runtime parameter-based prompt selection
-- `_render_prompt()`: Renders prompt files with variable substitution
+- `[param]` present at the level → returns a `DeferredPromptProxy`, because
+  static-versus-dynamic precedence depends on the call arguments
+- `DeferredPromptProxy`: Accumulates attribute segments and resolves the whole
+  path in `__call__()` once the routing parameters are known
+- `_resolve()` / `_resolve_dynamic()`: The recursive resolver. Static first
+  unless the caller supplied the level's parameter; fallback order at a
+  `[param]` level is `<value>/` → `default/` → `default.md` (last one only when
+  a single segment remains), and a failure there is **not** propagated outward
+- `_render_prompt_file()`: Renders prompt files with variable substitution
 
 **`src/prompteer/template.py`** - Variable substitution engine
 - `extract_variables()`: Finds all `{variable}` placeholders in templates
@@ -133,11 +139,18 @@ python examples/dynamic_routing.py
 - `VariableInfo`: Stores variable name, type, description, and default value
 - `get_type_default()`: Returns default values for types (str="", int=0, etc.)
 
-**`src/prompteer/path_utils.py`** - Naming conversions
+**`src/prompteer/path_utils.py`** - Naming conversions and name matching
 - `kebab_to_camel()`: `code-review` → `codeReview`
 - `camel_to_kebab()`: `codeReview` → `code-review`
+- `to_attribute_name()`: Filesystem name → stub attribute (`Chat` → `chat`)
 - `is_dynamic_dir()`: Checks if directory name matches `[param]` pattern
 - `extract_param_name()`: Extracts parameter name from `[type]` → `type`
+- `normalize_name()`: NFC + casefold, the key used for all name matching
+- `find_entry()`: Case- and unicode-insensitive child lookup via `os.scandir`,
+  with an mtime-validated cache (`clear_path_cache()` drops it)
+- `iter_dynamic_dirs()`: Lists `[param]` children, rejecting more than one
+- `validate_param_value()`: Rejects empty, blank, `None`, unsupported types and
+  path separators in routing values
 
 **`src/prompteer/type_generator.py`** - Type stub generation
 - Scans prompt directory structure
@@ -164,20 +177,75 @@ The library supports both relative and absolute paths:
 - **For packages/libraries**, always use `Path(__file__).parent / "prompts"` to ensure prompts are found regardless of where the code runs from
 - This pattern is critical for library usage and should be documented in examples
 
+### Name Matching
+
+All filesystem name matching happens inside prompteer, never delegated to
+`Path.exists()` / `Path.is_dir()`. The normalization key is
+`unicodedata.normalize("NFC", name).casefold()`, so matching ignores case and
+unicode normal form and yields the same result on macOS, Linux and Windows.
+
+This exists because the delegated version was a portability trap: macOS is
+case-insensitive and may store names in NFD, so a tree that resolved on a
+developer machine could fail on a case-sensitive Linux server.
+
+Lookup order per segment is exact match, then normalized match. Two entries
+differing only by case or normal form (possible only on a case-sensitive
+filesystem) raise `AmbiguousPromptError` rather than being guessed at.
+Attribute names are tried as `camel_to_kebab(name)` first, then verbatim.
+
 ### Dynamic Routing System
 
 Dynamic directories use `[param]` syntax (e.g., `[type]/`, `[language]/`):
 - Parameter name extracted from brackets: `[type]` → `type` parameter
 - Subdirectories represent possible values: `basic/`, `advanced/`
-- `default.md` serves as fallback when value doesn't match any directory
-- Type stubs use `Literal` types to provide autocomplete for available values
+- At most **one** `[param]` per directory level; more raises
+  `AmbiguousPromptError` since resolution would depend on traversal order
+- `[param]` directories **nest**, and static directories may sit between them
+- Type stubs use `Literal` types to provide autocomplete for available values,
+  and `@overload` when branches require different parameters
 - Example structure:
   ```
-  prompts/question/[type]/
-  ├── basic/user.md         # type="basic"
-  ├── advanced/user.md      # type="advanced"
-  └── default.md            # fallback
+  prompts/support/[tier]/
+  ├── pro/
+  │   ├── [lang]/ko/reply.md      # tier="pro", lang="ko"
+  │   └── escalation/manager.md   # static dir inside a route
+  ├── free/escalation/manager.md
+  ├── default/                    # fallback subtree
+  │   ├── reply.md
+  │   └── escalation/manager.md
+  └── default.md                  # fallback file, single segment only
   ```
+
+**Fallback order** at a `[param]` level, for a remaining path of N segments:
+1. `<value>/` subtree
+2. `default/` subtree
+3. `default.md` — **only when N == 1**. A single file cannot distinguish
+   `escalation/manager` from `escalation/report`, so falling back to it for a
+   multi-segment path would silently return the wrong prompt.
+4. Failure is **final**: it is not propagated to an outer `[param]` level.
+   Put a fallback at each level where you want one.
+
+**Static versus dynamic precedence** is decided by the call, not the
+filesystem. If the caller passed the level's routing parameter, the dynamic
+route is tried first and the static match is a fallback; otherwise the static
+match wins. A routing parameter that no route consumed raises rather than
+being silently treated as a template variable.
+
+**Routing values** must be a non-blank `str`, `int`, `bool` or `Enum` with no
+path separators; anything else raises `DynamicParameterError`. A *missing*
+argument still raises `TypeError`, per the usual Python convention.
+
+Consumed routing values are also passed to the template, so a prompt can write
+`{tier}` / `{lang}` in its body (`_Resolution.consumed` → `_render_prompt_file(
+routed=...)`). The caller's value is substituted verbatim, not the directory it
+matched. Two ordering constraints in `_render_prompt_file()`:
+- The unused-parameter guard runs on the caller's `kwargs` **before** the
+  routing values are merged in, or it would flag consumed parameters.
+- The "no arguments → return the body as-is" branches also key off the caller's
+  `kwargs`, so injecting routing values does not change that fallback.
+
+Resolution is bounded to 64 levels (`MAX_RESOLUTION_DEPTH`) to stop symlink
+loops.
 
 ### Variable Type System
 
@@ -203,7 +271,13 @@ active(bool): Is active
 ## Testing Strategy
 
 - **Unit tests**: Each module has corresponding test file (e.g., `test_core.py`, `test_template.py`)
-- **Integration tests**: `test_dynamic_routing.py` validates end-to-end workflows
+- **Integration tests**: `test_dynamic_routing.py` and
+  `test_nested_dynamic_routing.py` validate end-to-end routing workflows
+- **Portability tests**: `test_case_matching.py`. Two of its tests need a
+  case-sensitive filesystem to construct the collision and skip on macOS; the
+  same behaviour is covered on any platform by the stubbed-listing unit tests
+  in `test_path_utils.py`
+- `tests/conftest.py` clears the directory listing cache between tests
 - **Coverage target**: Currently ~78%, with focus on core functionality
 - Test files use `tmp_path` fixture for filesystem operations
 - Mock prompts created in test directories for isolation

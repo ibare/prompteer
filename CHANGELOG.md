@@ -5,6 +5,104 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-02
+
+### Fixed
+- **Dynamic routing stopped after one `[param]` level** - A nested
+  `[param]` directory was never scanned, so
+  `prompts.q.user(type="basic", lang="ko")` silently returned the outer
+  `default.md` and dropped `lang`. Routing is now recursive, and a parameter a
+  route needs is required rather than ignored.
+- **Name matching was delegated to the filesystem** - `Path.is_dir()` and
+  `Path.exists()` follow the rules of whatever filesystem is underneath, so a
+  tree that resolved on macOS (case-insensitive, names often stored as NFD)
+  could fail on a case-sensitive Linux server. Matching now happens inside
+  prompteer, ignoring case and unicode normal form, and produces the same
+  result on every platform. The same rule applies to routing values, so
+  `type="BASIC"` no longer resolves on one OS and falls back to `default.md`
+  on another.
+- **An empty routing value resolved ambiguously** - `type=""` joined to the
+  `[param]` directory itself, so it read a stray file inside it or fell through
+  to `default.md`. Empty, blank and `None` values now raise
+  `DynamicParameterError`.
+- **Routing values could escape the prompt directory** - `type="../../etc"`
+  was joined into the path unchecked. Path separators and relative references
+  are now rejected.
+- **A routing value that matched nothing could be silently ignored** - Passing
+  a parameter that no route consumes now raises instead of quietly rendering a
+  generic prompt.
+
+### Added
+- **Nested `[param]` routing** - `[param]` directories may nest to any depth;
+  each level consumes its own argument.
+- **Static directories inside dynamic routes** - `q/[type]/basic/extra/user.md`
+  is reachable as `prompts.q.extra.user(type="basic")`. Such paths resolve at
+  call time, because the routing arguments are only known then.
+- **Routing values are available as template variables** - A prompt selected
+  through `[tier]/pro/[lang]/ko/` can write `{tier}` and `{lang}` in its body,
+  including in `default.md` and the `default/` subtree. The value substituted
+  is the one the caller passed, not the directory it matched, so `tier="PRO"`
+  selects `pro/` and renders `PRO`. Previously the value was consumed by
+  routing and unreachable: `{type}` rendered as literal `{type}`, as an empty
+  string when declared in frontmatter, or raised `TemplateVariableError` when
+  other arguments were present. These names cannot collide with caller
+  variables, since routing pops the name before rendering and Python forbids
+  passing the same keyword twice.
+- **`default/` fallback subtree** - A `default/` directory beside the value
+  directories stands in for a whole subtree. `default.md` still works but is
+  used only when a single name remains to resolve, since one file cannot
+  distinguish `extra/user` from `extra/system`.
+- `DynamicParameterError` - unusable routing value (empty, blank, `None`,
+  unsupported type, or containing path separators).
+- `AmbiguousPromptError` - two entries in one directory differing only by case
+  or unicode normal form, or two `[param]` directories at one level.
+- `Enum` values are accepted for routing and route by their `.value`.
+- Resolution failures list every path that was tried.
+- `path_utils.clear_path_cache()` - drops the cached directory listings.
+- `@overload` generation in type stubs when branches of the tree require
+  different routing parameters, instead of unioning them into one signature
+  that claims every parameter is always required.
+- Type stub warnings for unportable trees: entries differing only by case, and
+  a directory and prompt file sharing a name.
+- `examples/prompts-dynamic/support/` and two new sections in
+  `examples/dynamic_routing.py` covering nested routes, static directories
+  inside a route, and the `default/` subtree. `prompteer init` scaffolds the
+  same structure.
+- 31 tests in `tests/test_nested_dynamic_routing.py` and
+  `tests/test_case_matching.py`, plus routing value validation, name matching
+  and stub generation tests. The suite grew from 161 to 218 tests.
+
+### Changed
+- **Static and dynamic precedence is decided by the call, not the filesystem.**
+  If you pass a level's routing parameter, the dynamic route is tried first and
+  the static match is used only as a fallback; if you do not pass it, the
+  static match wins. Previously the static match always won, so passing a
+  routing argument could quietly return the generic prompt.
+- Attribute access inside a directory that holds a `[param]` now returns a
+  deferred proxy and resolves on call. Trees without dynamic routing are
+  unchanged and still resolve eagerly.
+- `PromptNotFoundError` also inherits from `AttributeError`, so `hasattr()` and
+  other introspection helpers behave normally on prompt proxies.
+- Attribute names starting with `_` are never routed, so `hasattr`, `copy` and
+  IDE introspection no longer receive a routing callable.
+- Type stub attribute names are normalized to camelCase (`Chat/` → `chat`).
+  Previously a capitalized directory produced an attribute the runtime could
+  not resolve.
+- Resolution is bounded to 64 levels to stop symlink loops.
+
+### Breaking
+- `type=""`, `type=None`, values with path separators, and unsupported value
+  types now raise `DynamicParameterError` instead of resolving to something
+  arbitrary. A *missing* argument still raises `TypeError`.
+- Passing a routing parameter that no route consumes now raises.
+- Two entries in one directory that differ only by case or unicode normal form
+  now raise `AmbiguousPromptError` instead of resolving to whichever one the
+  filesystem returned first. This is only reachable on a case-sensitive
+  filesystem.
+- `PromptProxy.__getattr__` may return a `DeferredPromptProxy` rather than a
+  `PromptProxy` or a plain callable. It is still callable and still supports
+  attribute chaining; code that inspected the returned type may need updating.
+
 ## [0.4.0] - 2026-08-06
 
 ### Fixed

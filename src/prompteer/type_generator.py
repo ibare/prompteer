@@ -2,16 +2,34 @@
 Type stub generator for prompteer.
 
 Generates .pyi files from prompt directories for IDE autocompletion.
+
+Dynamic routes are flattened into the class that owns the ``[param]``
+directory. Nested ``[param]`` levels and static directories sitting between
+them are merged across value directories, so
+``q/[type]/basic/extra/user.md`` and ``q/[type]/advanced/extra/user.md``
+become a single ``extra.user(type=...)`` method.
 """
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from prompteer.metadata import parse_metadata
-from prompteer.path_utils import extract_param_name, is_dynamic_dir, kebab_to_camel
+from prompteer.path_utils import (
+    extract_param_name,
+    is_dynamic_dir,
+    normalize_name,
+    to_attribute_name,
+)
+
+#: 값 디렉터리 대신 폴백으로 쓰이는 이름
+DEFAULT_NAME = "default"
+
+#: 병적으로 깊은 트리에서 재귀를 막는다
+MAX_SCAN_DEPTH = 64
 
 
 def get_python_type(yaml_type: str) -> str:
@@ -86,6 +104,131 @@ def get_default_value(yaml_type: str) -> str:
     return defaults.get(yaml_type, "None")
 
 
+class PromptSpec:
+    """A prompt method as seen through the generated API.
+
+    The same method name can be reached through several branches of the prompt
+    tree, so variables are unioned and routing parameters are grouped by the
+    parameter names they require. Each group becomes one ``@overload``.
+    """
+
+    def __init__(self, name: str) -> None:
+        """Initialize an empty spec.
+
+        Args:
+            name: Attribute name of the prompt
+        """
+        self.name = name
+        # (파라미터 이름 튜플) -> Signature
+        self.signatures: dict[tuple[str, ...], Signature] = {}
+
+    def add(
+        self,
+        description: str | None,
+        variables: dict[str, dict[str, Any]],
+        params: tuple[tuple[str, str | None], ...],
+    ) -> None:
+        """Merge one filesystem occurrence of this prompt into the spec.
+
+        Occurrences that need the same routing parameters share a signature;
+        their values and variables are unioned. Occurrences needing different
+        parameters stay separate and become distinct overloads.
+
+        Args:
+            description: Description from the prompt frontmatter
+            variables: Variables declared by the prompt
+            params: Routing parameters traversed to reach it, as
+                ``(param_name, value)`` pairs. ``value`` is None for the
+                ``default/`` fallback subtree, which contributes no literal.
+        """
+        key = tuple(param for param, _ in params)
+        signature = self.signatures.get(key)
+        if signature is None:
+            signature = Signature(key)
+            self.signatures[key] = signature
+        signature.merge(description, variables, params)
+
+
+class Signature:
+    """One overload of a prompt: a fixed set of routing parameters."""
+
+    def __init__(self, params: tuple[str, ...]) -> None:
+        """Initialize an empty signature.
+
+        Args:
+            params: Routing parameter names, in traversal order
+        """
+        self.params = params
+        self.values: dict[str, set[str]] = {name: set() for name in params}
+        self.variables: dict[str, dict[str, Any]] = {}
+        self.description: str | None = None
+        # 설명을 default/ 폴백 브랜치에서 가져왔는지. 실제 값을 가진 브랜치의
+        # 설명이 나타나면 그쪽으로 교체한다.
+        self._description_is_fallback = True
+
+    def merge(
+        self,
+        description: str | None,
+        variables: dict[str, dict[str, Any]],
+        params: tuple[tuple[str, str | None], ...],
+    ) -> None:
+        """Fold another occurrence into this signature.
+
+        Args:
+            description: Description from the prompt frontmatter
+            variables: Variables declared by the prompt
+            params: Routing parameters with the value taken at each level
+        """
+        from_fallback = any(value is None for _, value in params)
+
+        if description and (
+            self.description is None
+            or (self._description_is_fallback and not from_fallback)
+        ):
+            self.description = description
+            self._description_is_fallback = from_fallback
+
+        for var_name, var_info in variables.items():
+            self.variables.setdefault(var_name, var_info)
+
+        for param, value in params:
+            if value is not None:
+                self.values[param].add(value)
+
+
+class ApiNode:
+    """A node of the generated API surface (one proxy class)."""
+
+    def __init__(self) -> None:
+        """Initialize an empty node."""
+        self.children: dict[str, ApiNode] = {}
+        self.prompts: dict[str, PromptSpec] = {}
+
+    def child(self, name: str) -> ApiNode:
+        """Get or create a child node.
+
+        Args:
+            name: Attribute name of the child
+
+        Returns:
+            The child node
+        """
+        return self.children.setdefault(name, ApiNode())
+
+    def prompt(self, name: str) -> PromptSpec:
+        """Get or create a prompt spec.
+
+        Args:
+            name: Attribute name of the prompt
+
+        Returns:
+            The prompt spec
+        """
+        if name not in self.prompts:
+            self.prompts[name] = PromptSpec(name)
+        return self.prompts[name]
+
+
 class TypeStubGenerator:
     """Generator for Python type stub files."""
 
@@ -101,9 +244,18 @@ class TypeStubGenerator:
         self.needs_union = False
         self.needs_any = False
         self.needs_literal = False
+        self.needs_overload = False
+        self.warnings: list[str] = []
+        self._class_names: dict[tuple[str, ...], str] = {}
+        self._used_class_names: set[str] = set()
+
+    # -- 파일시스템 스캔 (하위호환 API) ---------------------------------
 
     def scan_directory(self, current_dir: Path, depth: int = 0) -> dict[str, Any]:
         """Scan directory structure recursively.
+
+        Kept for backwards compatibility; the stub generation itself uses
+        :meth:`build_api_node`.
 
         Args:
             current_dir: Directory to scan
@@ -114,7 +266,7 @@ class TypeStubGenerator:
         """
         structure: dict[str, Any] = {}
 
-        if not current_dir.is_dir():
+        if not current_dir.is_dir() or depth > MAX_SCAN_DEPTH:
             return structure
 
         for item in sorted(current_dir.iterdir()):
@@ -122,75 +274,11 @@ class TypeStubGenerator:
                 continue
 
             if item.is_dir():
-                # Check if this is a dynamic directory
-                if is_dynamic_dir(item.name):
-                    # Dynamic directory - scan for available values and prompts
-                    structure[item.name] = self._scan_dynamic_dir(item)
-                else:
-                    # Regular subdirectory - recursively scan
-                    structure[item.name] = self.scan_directory(item, depth + 1)
+                structure[item.name] = self.scan_directory(item, depth + 1)
             elif item.suffix == ".md":
-                # Prompt file
-                var_name = item.stem
-                structure[var_name] = self._parse_prompt_file(item)
+                structure[item.stem] = self._parse_prompt_file(item)
 
         return structure
-
-    def _scan_dynamic_dir(self, dynamic_dir: Path) -> dict[str, Any]:
-        """Scan a dynamic directory and extract available values and prompts.
-
-        Args:
-            dynamic_dir: Path to dynamic directory (e.g., [type])
-
-        Returns:
-            Dictionary with dynamic directory metadata
-        """
-        param_name = extract_param_name(dynamic_dir.name)
-        available_values: list[str] = []
-        prompts: dict[str, dict[str, Any]] = {}
-
-        # Scan for value directories and prompts
-        for item in sorted(dynamic_dir.iterdir()):
-            if item.name.startswith("."):
-                continue
-
-            if item.is_dir():
-                # Value directory (e.g., basic/, advanced/)
-                available_values.append(item.name)
-
-                # Scan for prompt files inside value directory
-                for prompt_file in sorted(item.glob("*.md")):
-                    prompt_name = prompt_file.stem
-
-                    if prompt_name not in prompts:
-                        # Parse metadata from this file
-                        file_info = self._parse_prompt_file(prompt_file)
-                        prompts[prompt_name] = {
-                            "type": "dynamic",
-                            "param": param_name,
-                            "values": [item.name],
-                            "description": file_info.get("description"),
-                            "variables": file_info.get("variables", {}),
-                        }
-                    else:
-                        # Add this value to the existing prompt
-                        prompts[prompt_name]["values"].append(item.name)
-
-            elif item.suffix == ".md" and item.stem == "default":
-                # default.md file - this is a fallback
-                # We don't need to add it to prompts, it's handled at runtime
-                pass
-
-        # Mark that we need Literal import
-        if available_values:
-            self.needs_literal = True
-
-        return {
-            "type": "dynamic_directory",
-            "param": param_name,
-            "available_values": available_values,
-            "prompts": prompts,
-        }
 
     def _parse_prompt_file(self, file_path: Path) -> dict[str, Any]:
         """Parse a prompt file to extract metadata.
@@ -224,24 +312,346 @@ class TypeStubGenerator:
                 "variables": {},
             }
 
+    # -- API 트리 구성 ---------------------------------------------------
+
+    def build_api_node(
+        self,
+        directory: Path,
+        params: tuple[tuple[str, str | None], ...] = (),
+        node: ApiNode | None = None,
+        depth: int = 0,
+    ) -> ApiNode:
+        """Build the API surface for a directory.
+
+        Walks static directories as nested proxies and flattens ``[param]``
+        directories by merging every value subtree into the current node.
+
+        Args:
+            directory: Directory to scan
+            params: Routing parameters traversed to reach this directory
+            node: Node to merge into; a new one is created when omitted
+            depth: Current recursion depth
+
+        Returns:
+            The populated node
+        """
+        node = node if node is not None else ApiNode()
+        if not directory.is_dir() or depth > MAX_SCAN_DEPTH:
+            return node
+
+        entries = [
+            item for item in directory.iterdir() if not item.name.startswith(".")
+        ]
+        self._warn_on_case_collisions(directory, entries)
+
+        for item in sorted(entries, key=lambda path: path.name):
+            if item.is_dir():
+                if is_dynamic_dir(item.name):
+                    self._merge_dynamic_dir(item, params, node, depth)
+                else:
+                    self.build_api_node(
+                        item,
+                        params,
+                        node.child(to_attribute_name(item.name)),
+                        depth + 1,
+                    )
+            elif item.suffix == ".md":
+                info = self._parse_prompt_file(item)
+                node.prompt(to_attribute_name(item.stem)).add(
+                    info["description"], info["variables"], params
+                )
+
+        return node
+
+    def _merge_dynamic_dir(
+        self,
+        dynamic_dir: Path,
+        params: tuple[tuple[str, str | None], ...],
+        node: ApiNode,
+        depth: int,
+    ) -> None:
+        """Merge every branch of a ``[param]`` directory into a node.
+
+        Args:
+            dynamic_dir: The ``[param]`` directory
+            params: Routing parameters traversed so far
+            node: Node the branches are merged into
+            depth: Current recursion depth
+        """
+        param_name = extract_param_name(dynamic_dir.name)
+        self.needs_literal = True
+
+        for item in sorted(dynamic_dir.iterdir(), key=lambda path: path.name):
+            if item.name.startswith(".") or not item.is_dir():
+                # default.md 는 이름을 가리지 않는 런타임 폴백이라 API 표면이 없다.
+                continue
+
+            # default/ 는 폴백 서브트리이므로 선택 가능한 값에는 넣지 않는다.
+            value = None if normalize_name(item.name) == DEFAULT_NAME else item.name
+            self.build_api_node(item, params + ((param_name, value),), node, depth + 1)
+
+    def _warn_on_case_collisions(self, directory: Path, entries: list[Path]) -> None:
+        """Record a warning for entries that differ only by case or normal form.
+
+        Args:
+            directory: Directory being scanned
+            entries: Its entries
+        """
+        seen: dict[str, list[str]] = {}
+        for item in entries:
+            seen.setdefault(normalize_name(item.name), []).append(item.name)
+
+        for names in seen.values():
+            if len(names) > 1:
+                listed = ", ".join(repr(name) for name in sorted(names))
+                self.warnings.append(
+                    f"{directory}: {listed} differ only by case or unicode "
+                    "normal form; prompteer cannot resolve them portably."
+                )
+
+    # -- 스텁 생성 --------------------------------------------------------
+
     def generate_type_stub(self, output_path: Path) -> None:
         """Generate type stub file.
 
         Args:
             output_path: Path to output .pyi file
         """
-        # Scan directory structure
-        structure = self.scan_directory(self.prompts_dir)
+        self.warnings.clear()
+        self._class_names.clear()
+        self._used_class_names.clear()
+        self.needs_literal = False
+        self.needs_overload = False
 
-        # Generate type stub content
+        root = self.build_api_node(self.prompts_dir)
+
+        # 클래스 이름을 먼저 확정해야 상호 참조를 쓸 수 있다.
+        self._assign_class_names(root, ())
+        self._detect_overloads(root)
+
+        body: list[str] = []
+        self._emit_classes(root, (), body)
+
         lines = self._generate_header()
-        lines.extend(self._generate_classes(structure))
-        lines.append(self._generate_main_class(structure))
+        lines.extend(body)
+        lines.append(self._emit_root_class(root))
         lines.append("")
         lines.append(self._generate_factory_function())
 
-        # Write to file
         output_path.write_text("\n".join(lines), encoding=self.encoding)
+
+        for warning in self.warnings:
+            print(f"[prompteer] warning: {warning}", file=sys.stderr)
+
+    def _assign_class_names(self, node: ApiNode, path: tuple[str, ...]) -> None:
+        """Assign a unique proxy class name to every node.
+
+        Args:
+            node: Node to name
+            path: Attribute path leading to the node
+        """
+        if path:
+            base = "_" + "".join(part[:1].upper() + part[1:] for part in path) + "Proxy"
+            name = base
+            suffix = 2
+            while name in self._used_class_names:
+                name = f"{base}{suffix}"
+                suffix += 1
+            self._used_class_names.add(name)
+            self._class_names[path] = name
+
+        for child_name, child in node.children.items():
+            self._assign_class_names(child, path + (child_name,))
+
+    def _detect_overloads(self, node: ApiNode) -> None:
+        """Set the overload import flag if any prompt needs several signatures.
+
+        Args:
+            node: Node to inspect
+        """
+        for spec in node.prompts.values():
+            if len(spec.signatures) > 1:
+                self.needs_overload = True
+        for child in node.children.values():
+            self._detect_overloads(child)
+
+    def _emit_classes(
+        self, node: ApiNode, path: tuple[str, ...], out: list[str]
+    ) -> None:
+        """Emit proxy classes for a node and its descendants, deepest first.
+
+        Args:
+            node: Node to emit
+            path: Attribute path leading to the node
+            out: Accumulated output lines
+        """
+        for child_name in sorted(node.children):
+            self._emit_classes(node.children[child_name], path + (child_name,), out)
+
+        if not path:
+            return
+
+        class_name = self._class_names[path]
+        out.append(f"class {class_name}:")
+        out.append(f'    """Proxy for {"/".join(path)}/ directory."""')
+        out.append("")
+        out.extend(self._emit_members(node, path))
+
+    def _emit_members(self, node: ApiNode, path: tuple[str, ...]) -> list[str]:
+        """Emit the properties and methods of a node.
+
+        Args:
+            node: Node to emit members for
+            path: Attribute path leading to the node
+
+        Returns:
+            Member definition lines
+        """
+        lines: list[str] = []
+
+        for child_name in sorted(node.children):
+            if child_name in node.prompts:
+                self.warnings.append(
+                    f"{'/'.join(path + (child_name,))}: a directory and a prompt "
+                    "file share this name; the directory wins."
+                )
+                node.prompts.pop(child_name)
+            child_class = self._class_names[path + (child_name,)]
+            lines.append("    @property")
+            lines.append(f"    def {child_name}(self) -> {child_class}: ...")
+            lines.append("")
+
+        for prompt_name in sorted(node.prompts):
+            lines.extend(self._emit_prompt(node.prompts[prompt_name]))
+
+        if not lines:
+            lines.append("    pass")
+            lines.append("")
+
+        return lines
+
+    def _emit_prompt(self, spec: PromptSpec) -> list[str]:
+        """Emit the method (or overload set) for one prompt.
+
+        Args:
+            spec: Prompt specification
+
+        Returns:
+            Method definition lines
+        """
+        signatures = [spec.signatures[key] for key in sorted(spec.signatures)]
+        overloaded = len(signatures) > 1
+
+        lines: list[str] = []
+        for signature in signatures:
+            if overloaded:
+                lines.append("    @overload")
+            lines.extend(self._emit_signature(spec, signature))
+        return lines
+
+    def _emit_signature(self, spec: PromptSpec, signature: Signature) -> list[str]:
+        """Emit a single method signature.
+
+        Args:
+            spec: Prompt specification
+            signature: The overload to emit
+
+        Returns:
+            Method definition lines
+        """
+        params: list[str] = ["self"]
+        for param in signature.params:
+            params.append(f"{param}: {self._literal_type(signature.values[param])}")
+
+        for var_name in sorted(signature.variables):
+            var_info = signature.variables[var_name]
+            var_type = get_python_type(var_info["type"])
+            default_val = get_default_value(var_info["type"])
+            params.append(f"{var_name}: {var_type} = {default_val}")
+
+        params.append("**kwargs: Any")
+
+        lines: list[str] = []
+        if len(params) <= 3:
+            lines.append(f"    def {spec.name}({', '.join(params)}) -> str:")
+        else:
+            lines.append(f"    def {spec.name}(")
+            for index, param in enumerate(params):
+                comma = "" if index == len(params) - 1 else ","
+                lines.append(f"        {param}{comma}")
+            lines.append("    ) -> str:")
+
+        lines.extend(self._emit_docstring(signature))
+        lines.append("        ...")
+        lines.append("")
+        return lines
+
+    def _literal_type(self, values: set[str]) -> str:
+        """Render the annotation for a routing parameter.
+
+        Args:
+            values: Available values; empty when only a ``default/`` subtree
+                provides the prompt
+
+        Returns:
+            A ``Literal[...]`` annotation, or ``str`` when nothing is enumerable
+        """
+        if not values:
+            return "str"
+        self.needs_literal = True
+        return f"Literal[{', '.join(f'{chr(34)}{v}{chr(34)}' for v in sorted(values))}]"
+
+    def _emit_docstring(self, signature: Signature) -> list[str]:
+        """Emit the docstring for a method signature.
+
+        Args:
+            signature: The overload being emitted
+
+        Returns:
+            Docstring lines
+        """
+        lines = ['        """']
+        if signature.description:
+            lines.append(f"        {signature.description}")
+            lines.append("")
+
+        if signature.params or signature.variables:
+            lines.append("        Args:")
+            for param in signature.params:
+                available = sorted(signature.values[param])
+                listed = ", ".join(available) if available else "(fallback only)"
+                lines.append(
+                    f"            {param}: Dynamic routing parameter. "
+                    f"Available values: {listed}"
+                )
+            for var_name in sorted(signature.variables):
+                var_desc = signature.variables[var_name].get("description", "")
+                lines.append(f"            {var_name}: {var_desc}")
+            lines.append("            **kwargs: Additional variables")
+
+        lines.append('        """')
+        return lines
+
+    def _emit_root_class(self, root: ApiNode) -> str:
+        """Emit the main Prompteer class.
+
+        Args:
+            root: Root API node
+
+        Returns:
+            Class definition as string
+        """
+        lines: list[str] = []
+        lines.append("class Prompteer:")
+        lines.append('    """prompteer\'s main class')
+        lines.append("")
+        lines.append("    Args:")
+        lines.append("        base_path: Root directory containing prompt files")
+        lines.append("        encoding: File encoding (default: 'utf-8')")
+        lines.append('    """')
+        lines.append("")
+        lines.extend(self._emit_members(root, ()))
+        return "\n".join(lines)
 
     def _generate_header(self) -> list[str]:
         """Generate file header.
@@ -260,216 +670,16 @@ class TypeStubGenerator:
             '"""',
             "",
             "from typing import Any",
+            "from typing import Union",
         ]
 
-        # Add Union import if needed (we'll check this during generation)
-        # For now, always add it since we might have 'number' type
-        lines.append("from typing import Union")
-
-        # Add Literal import if needed for dynamic routing
         if self.needs_literal:
             lines.append("from typing import Literal")
+        if self.needs_overload:
+            lines.append("from typing import overload")
 
         lines.append("")
-
         return lines
-
-    def _generate_classes(
-        self, structure: dict[str, Any], parent_name: str = ""
-    ) -> list[str]:
-        """Generate proxy classes recursively.
-
-        Args:
-            structure: Directory structure dictionary
-            parent_name: Parent class name prefix
-
-        Returns:
-            List of class definition lines
-        """
-        lines: list[str] = []
-
-        # Process subdirectories first
-        for name, content in sorted(structure.items()):
-            if isinstance(content, dict) and content.get("type") == "file":
-                continue  # Skip files for now
-
-            # Check if this is a dynamic directory
-            if isinstance(content, dict) and content.get("type") == "dynamic_directory":
-                # Don't generate a class for dynamic directories
-                # Their prompts will be added directly to the parent class
-                continue
-
-            # This is a regular directory
-            class_name = f"_{self._to_class_name(parent_name + name.capitalize())}Proxy"
-
-            # Recursively generate classes for subdirectories
-            if isinstance(content, dict):
-                lines.extend(self._generate_classes(content, parent_name + name.capitalize()))
-
-            # Generate this class
-            lines.append(f"class {class_name}:")
-            lines.append(f'    """Proxy for {name}/ directory."""')
-            lines.append("")
-
-            # Add properties for subdirectories and methods for files
-            has_members = False
-            for sub_name, sub_content in sorted(content.items()):
-                if isinstance(sub_content, dict):
-                    if sub_content.get("type") == "file":
-                        # File - add method
-                        lines.extend(self._generate_method(sub_name, sub_content))
-                        has_members = True
-                    elif sub_content.get("type") == "dynamic_directory":
-                        # Dynamic directory - add methods for its prompts
-                        prompts = sub_content.get("prompts", {})
-                        for prompt_name, prompt_info in sorted(prompts.items()):
-                            lines.extend(self._generate_method(prompt_name, prompt_info))
-                            has_members = True
-                    else:
-                        # Regular directory - add property
-                        sub_class_name = f"_{self._to_class_name(parent_name + name.capitalize() + sub_name.capitalize())}Proxy"
-                        lines.append("    @property")
-                        lines.append(f"    def {kebab_to_camel(sub_name)}(self) -> {sub_class_name}: ...")
-                        lines.append("")
-                        has_members = True
-
-            if not has_members:
-                lines.append("    pass")
-                lines.append("")
-
-        return lines
-
-    def _generate_method(self, name: str, file_info: dict[str, Any]) -> list[str]:
-        """Generate method for a prompt file.
-
-        Args:
-            name: File name (without extension)
-            file_info: File metadata
-
-        Returns:
-            List of method definition lines
-        """
-        lines: list[str] = []
-        variables = file_info.get("variables", {})
-        description = file_info.get("description")
-
-        # Build method signature
-        method_name = kebab_to_camel(name)
-        params: list[str] = ["self"]
-
-        # Check if this is a dynamic prompt
-        if file_info.get("type") == "dynamic":
-            # Add dynamic parameter with Literal type
-            param_name = file_info.get("param")
-            values = file_info.get("values", [])
-            if values:
-                # Create Literal type with all available values
-                literal_values = ", ".join(f'"{v}"' for v in sorted(values))
-                params.append(f"{param_name}: Literal[{literal_values}]")
-
-        # Add parameters with types and defaults
-        for var_name, var_info in sorted(variables.items()):
-            var_type = get_python_type(var_info["type"])
-            default_val = get_default_value(var_info["type"])
-            params.append(f"{var_name}: {var_type} = {default_val}")
-
-        # Always add **kwargs
-        params.append("**kwargs: Any")
-
-        # Format parameters (one per line if many)
-        if len(params) <= 3:
-            param_str = ", ".join(params)
-            lines.append(f"    def {method_name}({param_str}) -> str:")
-        else:
-            lines.append(f"    def {method_name}(")
-            for i, param in enumerate(params):
-                if i == 0:
-                    lines.append(f"        {param},")
-                elif i == len(params) - 1:
-                    lines.append(f"        {param}")
-                else:
-                    lines.append(f"        {param},")
-            lines.append("    ) -> str:")
-
-        # Add docstring
-        lines.append('        """')
-        if description:
-            lines.append(f"        {description}")
-            lines.append("")
-
-        # Add dynamic parameter documentation if applicable
-        if file_info.get("type") == "dynamic":
-            param_name = file_info.get("param")
-            values = file_info.get("values", [])
-            lines.append("        Args:")
-            lines.append(f"            {param_name}: Dynamic routing parameter. Available values: {', '.join(sorted(values))}")
-            if variables:
-                for var_name, var_info in sorted(variables.items()):
-                    var_desc = var_info.get("description", "")
-                    lines.append(f"            {var_name}: {var_desc}")
-            lines.append("            **kwargs: Additional variables")
-        elif variables:
-            lines.append("        Args:")
-            for var_name, var_info in sorted(variables.items()):
-                var_desc = var_info.get("description", "")
-                lines.append(f"            {var_name}: {var_desc}")
-            lines.append("            **kwargs: Additional variables")
-
-        lines.append('        """')
-        lines.append("        ...")
-        lines.append("")
-
-        return lines
-
-    def _generate_main_class(self, structure: dict[str, Any]) -> str:
-        """Generate main Prompteer class.
-
-        Args:
-            structure: Directory structure
-
-        Returns:
-            Class definition as string
-        """
-        lines: list[str] = []
-
-        lines.append("class Prompteer:")
-        lines.append('    """prompteer\'s main class')
-        lines.append("")
-        lines.append("    Args:")
-        lines.append("        base_path: Root directory containing prompt files")
-        lines.append("        encoding: File encoding (default: 'utf-8')")
-        lines.append('    """')
-        lines.append("")
-
-        # Add properties for top-level directories and methods for files
-        for name, content in sorted(structure.items()):
-            if isinstance(content, dict):
-                if content.get("type") == "file":
-                    # Top-level file - add method
-                    lines.extend(
-                        [
-                            "    " + line if line else ""
-                            for line in self._generate_method(name, content)
-                        ]
-                    )
-                elif content.get("type") == "dynamic_directory":
-                    # Top-level dynamic directory - add methods for its prompts
-                    prompts = content.get("prompts", {})
-                    for prompt_name, prompt_info in sorted(prompts.items()):
-                        lines.extend(
-                            [
-                                "    " + line if line else ""
-                                for line in self._generate_method(prompt_name, prompt_info)
-                            ]
-                        )
-                else:
-                    # Regular directory - add property
-                    class_name = f"_{self._to_class_name(name.capitalize())}Proxy"
-                    lines.append("    @property")
-                    lines.append(f"    def {kebab_to_camel(name)}(self) -> {class_name}: ...")
-                    lines.append("")
-
-        return "\n".join(lines)
 
     def _to_class_name(self, name: str) -> str:
         """Convert name to class name format.
@@ -480,7 +690,6 @@ class TypeStubGenerator:
         Returns:
             Class name
         """
-        # Remove hyphens and capitalize
         return "".join(word.capitalize() for word in name.replace("-", " ").split())
 
     def _generate_factory_function(self) -> str:
@@ -491,20 +700,30 @@ class TypeStubGenerator:
         """
         lines: list[str] = []
 
-        lines.append("def create_prompts(base_path: str, encoding: str = \"utf-8\") -> Prompteer:")
-        lines.append('    """Create a Prompteer instance with automatic type inference.')
+        lines.append(
+            'def create_prompts(base_path: str, encoding: str = "utf-8") -> Prompteer:'
+        )
+        lines.append(
+            '    """Create a Prompteer instance with automatic type inference.'
+        )
         lines.append("")
-        lines.append("    This is a convenience factory function that creates a Prompteer instance")
+        lines.append(
+            "    This is a convenience factory function that creates a Prompteer instance"
+        )
         lines.append("    and returns it with proper type hints.")
         lines.append("")
         lines.append("    Usage:")
         lines.append("        >>> from prompts import create_prompts")
         lines.append('        >>> prompts = create_prompts("./prompts")')
-        lines.append('        >>> prompts.chat.system(role="...", personality="...")  # Full autocomplete!')
+        lines.append(
+            '        >>> prompts.chat.system(role="...", personality="...")  # Full autocomplete!'
+        )
         lines.append("")
         lines.append("    Args:")
         lines.append("        base_path: Root directory containing prompt files")
-        lines.append("        encoding: File encoding for reading prompts (default: 'utf-8')")
+        lines.append(
+            "        encoding: File encoding for reading prompts (default: 'utf-8')"
+        )
         lines.append("")
         lines.append("    Returns:")
         lines.append("        Prompteer instance with full type hints")
